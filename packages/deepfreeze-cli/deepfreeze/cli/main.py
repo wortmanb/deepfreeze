@@ -662,7 +662,7 @@ def refreeze(
 @click.option(
     "--sync/--async",
     "sync",
-    default=False,
+    default=True,
     show_default=True,
     help="Wait for restore and mount (sync) or return immediately (async)",
 )
@@ -745,13 +745,13 @@ def thaw(
     \b
     Examples:
 
-      # Create new thaw request (async)
-
-      deepfreeze thaw -s 2025-01-01T00:00:00Z -e 2025-01-15T23:59:59Z --async
-
       # Create new thaw request (sync - waits for completion)
 
-      deepfreeze thaw -s 2025-01-01T00:00:00Z -e 2025-01-15T23:59:59Z --sync
+      deepfreeze thaw -s 2025-01-01T00:00:00Z -e 2025-01-15T23:59:59Z
+
+      # Create new thaw request (async - returns immediately)
+
+      deepfreeze thaw -s 2025-01-01T00:00:00Z -e 2025-01-15T23:59:59Z --async
 
       # Check status of a specific request and mount if ready
 
