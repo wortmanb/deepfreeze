@@ -24,7 +24,9 @@ from deepfreeze_core.helpers import Repository, Settings
 from deepfreeze_core.s3client import S3Client
 
 
-def push_to_glacier(s3: S3Client, repo: Repository, storage_class: str = "GLACIER") -> bool:
+def push_to_glacier(
+    s3: S3Client, repo: Repository, storage_class: str = "GLACIER"
+) -> bool:
     """Push objects to archive storage (Glacier for AWS, Archive tier for Azure, etc.)
 
     Uses the storage client's refreeze method which handles provider-specific
@@ -397,7 +399,12 @@ def create_repo(
     :raises ActionError: If the repository cannot be created
     """
     loggit = logging.getLogger("deepfreeze.utilities")
-    loggit.info("Creating repo %s using bucket %s (provider: %s)", repo_name, bucket_name, provider)
+    loggit.info(
+        "Creating repo %s using bucket %s (provider: %s)",
+        repo_name,
+        bucket_name,
+        provider,
+    )
     if dry_run:
         return
 
@@ -621,7 +628,9 @@ def unmount_repo(client: Elasticsearch, repo: str) -> Repository:
     # Get repository info from Elasticsearch
     repo_info = client.snapshot.get_repository(name=repo)[repo]
     # Handle different providers: AWS/GCP use "bucket", Azure uses "container"
-    bucket = repo_info["settings"].get("bucket") or repo_info["settings"].get("container")
+    bucket = repo_info["settings"].get("bucket") or repo_info["settings"].get(
+        "container"
+    )
     base_path = repo_info["settings"]["base_path"]
 
     # Get repository object from status index
@@ -919,14 +928,14 @@ def update_index_template_ilm_policy(
             template_data["template"]["settings"]["index"]["lifecycle"] = {}
 
         # Get old policy name for logging
-        old_policy = template_data["template"]["settings"]["index"][
-            "lifecycle"
-        ].get("name", "none")
+        old_policy = template_data["template"]["settings"]["index"]["lifecycle"].get(
+            "name", "none"
+        )
 
         # Set the new ILM policy
-        template_data["template"]["settings"]["index"]["lifecycle"][
-            "name"
-        ] = ilm_policy_name
+        template_data["template"]["settings"]["index"]["lifecycle"]["name"] = (
+            ilm_policy_name
+        )
 
         # Only include fields accepted by put_index_template to avoid
         # sending system-managed fields (e.g. created_date) from the GET response
@@ -942,17 +951,15 @@ def update_index_template_ilm_policy(
             "deprecated",
             "ignore_missing_component_templates",
         }
-        put_body = {k: v for k, v in template_data.items() if k in _COMPOSABLE_TEMPLATE_FIELDS}
+        put_body = {
+            k: v for k, v in template_data.items() if k in _COMPOSABLE_TEMPLATE_FIELDS
+        }
 
         # Put the updated template
         try:
-            client.indices.put_index_template(
-                name=template_name, body=put_body
-            )
+            client.indices.put_index_template(name=template_name, body=put_body)
         except Exception as e:
-            loggit.error(
-                "Error updating composable template %s: %s", template_name, e
-            )
+            loggit.error("Error updating composable template %s: %s", template_name, e)
             raise ActionError(
                 f"Failed to update composable template {template_name}: {e}"
             ) from e
@@ -983,7 +990,9 @@ def update_index_template_ilm_policy(
         }
     except Exception as e:
         loggit.error("Error checking legacy template %s: %s", template_name, e)
-        raise ActionError(f"Failed to check legacy template {template_name}: {e}") from e
+        raise ActionError(
+            f"Failed to check legacy template {template_name}: {e}"
+        ) from e
 
     if templates and template_name in templates:
         template_data = templates[template_name]
@@ -998,9 +1007,7 @@ def update_index_template_ilm_policy(
             template_data["settings"]["index"]["lifecycle"] = {}
 
         # Get old policy name for logging
-        old_policy = template_data["settings"]["index"]["lifecycle"].get(
-            "name", "none"
-        )
+        old_policy = template_data["settings"]["index"]["lifecycle"].get("name", "none")
 
         # Set the new ILM policy
         template_data["settings"]["index"]["lifecycle"]["name"] = ilm_policy_name
@@ -1775,9 +1782,9 @@ def update_template_ilm_policy(
                 if "lifecycle" not in template["template"]["settings"]["index"]:
                     template["template"]["settings"]["index"]["lifecycle"] = {}
 
-                template["template"]["settings"]["index"]["lifecycle"][
-                    "name"
-                ] = new_policy_name
+                template["template"]["settings"]["index"]["lifecycle"]["name"] = (
+                    new_policy_name
+                )
 
                 # Only include fields accepted by put_index_template to avoid
                 # sending system-managed fields (e.g. created_date) from the GET response
@@ -1793,7 +1800,9 @@ def update_template_ilm_policy(
                     "deprecated",
                     "ignore_missing_component_templates",
                 }
-                put_body = {k: v for k, v in template.items() if k in _COMPOSABLE_FIELDS}
+                put_body = {
+                    k: v for k, v in template.items() if k in _COMPOSABLE_FIELDS
+                }
 
                 client.indices.put_index_template(name=template_name, body=put_body)
                 loggit.info(
@@ -2092,6 +2101,21 @@ def mount_snapshot_index(
     :rtype: bool
     """
     loggit = logging.getLogger("deepfreeze.utilities")
+
+    # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
+    # but mounted indices should use the original name. Strip that prefix.
+    # Pattern: fm-clone-<random>-<original-name> -> <original-name>
+    original_index_name = index_name
+    if index_name.startswith("fm-clone-"):
+        # Find the second hyphen (after random chars) and strip prefix
+        parts = index_name.split("-", 3)  # ['fm', 'clone', 'random', 'rest']
+        if len(parts) >= 4:
+            original_index_name = parts[3]  # Everything after fm-clone-xxxx-
+            loggit.debug(
+                "Stripped fm-clone prefix: %s -> %s", index_name, original_index_name
+            )
+            index_name = original_index_name
+
     loggit.info(
         "Mounting index %s from snapshot %s/%s", index_name, repo_name, snapshot_name
     )
@@ -2384,6 +2408,23 @@ def find_and_mount_indices_in_date_range(
                     continue
 
                 snapshot_name = snapshots[-1]
+
+                # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
+                # but mounted indices should use the original name. Strip that prefix.
+                # Pattern: fm-clone-<random>-<original-name> -> <original-name>
+                if index_name.startswith("fm-clone-"):
+                    # Find the second hyphen (after random chars) and strip prefix
+                    parts = index_name.split(
+                        "-", 3
+                    )  # ['fm', 'clone', 'random', 'rest']
+                    if len(parts) >= 4:
+                        original_name = parts[3]  # Everything after fm-clone-xxxx-
+                        loggit.debug(
+                            "Stripped fm-clone prefix: %s -> %s",
+                            index_name,
+                            original_name,
+                        )
+                        index_name = original_name
 
                 already_mounted = client.indices.exists(index=index_name)
                 if already_mounted:
