@@ -2103,54 +2103,61 @@ def mount_snapshot_index(
     loggit = logging.getLogger("deepfreeze.utilities")
 
     # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
-    # but mounted indices should use the original name. Strip that prefix.
+    # but mounted indices should use the original name. We need to use
+    # the original index name (with prefix) to mount from the snapshot,
+    # but the stripped name for the mounted index.
     # Pattern: fm-clone-<random>-<original-name> -> <original-name>
     original_index_name = index_name
+    mounted_index_name = index_name
     if index_name.startswith("fm-clone-"):
         # Find the second hyphen (after random chars) and strip prefix
         parts = index_name.split("-", 3)  # ['fm', 'clone', 'random', 'rest']
         if len(parts) >= 4:
-            original_index_name = parts[3]  # Everything after fm-clone-xxxx-
+            mounted_index_name = parts[3]  # Everything after fm-clone-xxxx-
             loggit.debug(
-                "Stripped fm-clone prefix: %s -> %s", index_name, original_index_name
+                "Stripped fm-clone prefix: %s -> %s",
+                original_index_name,
+                mounted_index_name,
             )
-            index_name = original_index_name
 
     loggit.info(
-        "Mounting index %s from snapshot %s/%s", index_name, repo_name, snapshot_name
+        "Mounting index %s from snapshot %s/%s",
+        mounted_index_name,
+        repo_name,
+        snapshot_name,
     )
 
     # Check if index is already mounted
-    already_mounted = client.indices.exists(index=index_name)
+    already_mounted = client.indices.exists(index=mounted_index_name)
     if already_mounted:
-        loggit.info("Index %s is already mounted", index_name)
+        loggit.info("Index %s is already mounted", mounted_index_name)
         if ilm_policy:
             try:
                 loggit.debug(
                     "Removing old ILM policy from %s before assigning new policy",
-                    index_name,
+                    mounted_index_name,
                 )
                 try:
-                    client.ilm.remove_policy(index=index_name)
+                    client.ilm.remove_policy(index=mounted_index_name)
                 except Exception as remove_err:
                     loggit.debug(
                         "Could not remove ILM policy from %s (may not have one): %s",
-                        index_name,
+                        mounted_index_name,
                         remove_err,
                     )
 
                 client.indices.put_settings(
-                    index=index_name, body={"index.lifecycle.name": ilm_policy}
+                    index=mounted_index_name, body={"index.lifecycle.name": ilm_policy}
                 )
                 loggit.info(
                     "Assigned ILM policy %s to already-mounted index %s",
                     ilm_policy,
-                    index_name,
+                    mounted_index_name,
                 )
             except Exception as e:
                 loggit.warning(
                     "Failed to assign ILM policy to already-mounted index %s: %s",
-                    index_name,
+                    mounted_index_name,
                     e,
                 )
         return True
@@ -2159,40 +2166,43 @@ def mount_snapshot_index(
         client.searchable_snapshots.mount(
             repository=repo_name,
             snapshot=snapshot_name,
-            body={"index": index_name},
+            body={
+                "index": original_index_name,  # The index name in the snapshot (with fm-clone prefix)
+                "renamed_index": mounted_index_name,  # The name for the mounted index (without prefix)
+            },
         )
-        loggit.info("Successfully mounted index %s", index_name)
+        loggit.info("Successfully mounted index %s", mounted_index_name)
 
         if ilm_policy:
             try:
                 loggit.debug(
                     "Removing old ILM policy from %s before assigning new policy",
-                    index_name,
+                    mounted_index_name,
                 )
                 try:
-                    client.ilm.remove_policy(index=index_name)
+                    client.ilm.remove_policy(index=mounted_index_name)
                 except Exception as remove_err:
                     loggit.debug(
                         "Could not remove ILM policy from %s (may not have one): %s",
-                        index_name,
+                        mounted_index_name,
                         remove_err,
                     )
 
                 client.indices.put_settings(
-                    index=index_name, body={"index.lifecycle.name": ilm_policy}
+                    index=mounted_index_name, body={"index.lifecycle.name": ilm_policy}
                 )
                 loggit.info(
-                    "Assigned ILM policy %s to index %s", ilm_policy, index_name
+                    "Assigned ILM policy %s to index %s", ilm_policy, mounted_index_name
                 )
             except Exception as e:
                 loggit.warning(
-                    "Failed to assign ILM policy to index %s: %s", index_name, e
+                    "Failed to assign ILM policy to index %s: %s", mounted_index_name, e
                 )
 
         return True
 
     except Exception as e:
-        loggit.error("Failed to mount index %s: %s", index_name, e)
+        loggit.error("Failed to mount index %s: %s", mounted_index_name, e)
         return False
 
 
@@ -2409,44 +2419,35 @@ def find_and_mount_indices_in_date_range(
 
                 snapshot_name = snapshots[-1]
 
-                # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
-                # but mounted indices should use the original name. Strip that prefix.
-                # Pattern: fm-clone-<random>-<original-name> -> <original-name>
+                # mount_snapshot_index will handle fm-clone prefix stripping internally
+                # Determine the mounted index name (with or without prefix stripping)
                 if index_name.startswith("fm-clone-"):
-                    # Find the second hyphen (after random chars) and strip prefix
-                    parts = index_name.split(
-                        "-", 3
-                    )  # ['fm', 'clone', 'random', 'rest']
-                    if len(parts) >= 4:
-                        original_name = parts[3]  # Everything after fm-clone-xxxx-
-                        loggit.debug(
-                            "Stripped fm-clone prefix: %s -> %s",
-                            index_name,
-                            original_name,
-                        )
-                        index_name = original_name
+                    parts = index_name.split("-", 3)
+                    mounted_name = parts[3] if len(parts) >= 4 else index_name
+                else:
+                    mounted_name = index_name
 
-                already_mounted = client.indices.exists(index=index_name)
+                already_mounted = client.indices.exists(index=mounted_name)
                 if already_mounted:
                     loggit.debug(
                         "Index %s is already mounted, skipping mount operation",
-                        index_name,
+                        mounted_name,
                     )
                     if thawed_policy and not mount_snapshot_index(
                         client, repo.name, snapshot_name, index_name, thawed_policy
                     ):
                         loggit.warning(
                             "Failed to assign ILM policy to already-mounted index %s",
-                            index_name,
+                            mounted_name,
                         )
                 else:
                     if not mount_snapshot_index(
                         client, repo.name, snapshot_name, index_name, thawed_policy
                     ):
-                        failed_indices.append(index_name)
+                        failed_indices.append(mounted_name)
                         continue
 
-                    if not wait_for_index_ready(client, index_name):
+                    if not wait_for_index_ready(client, mounted_name):
                         loggit.warning(
                             "Index %s did not become ready in time, may have query issues",
                             index_name,
@@ -2455,7 +2456,7 @@ def find_and_mount_indices_in_date_range(
                 keep_mounted = True
 
                 try:
-                    index_start, index_end = get_timestamp_range(client, [index_name])
+                    index_start, index_end = get_timestamp_range(client, [mounted_name])
 
                     if index_start and index_end:
                         index_start_dt = decode_date(index_start)
@@ -2464,61 +2465,63 @@ def find_and_mount_indices_in_date_range(
                         if index_start_dt <= end_date and index_end_dt >= start_date:
                             loggit.info(
                                 "Index %s overlaps date range (%s to %s), keeping mounted",
-                                index_name,
+                                mounted_name,
                                 index_start_dt.isoformat(),
                                 index_end_dt.isoformat(),
                             )
                         else:
                             loggit.info(
                                 "Index %s does not overlap date range (%s to %s), unmounting",
-                                index_name,
+                                mounted_name,
                                 index_start_dt.isoformat(),
                                 index_end_dt.isoformat(),
                             )
                             keep_mounted = False
                             try:
-                                client.indices.delete(index=index_name)
-                                loggit.debug("Unmounted index %s", index_name)
+                                client.indices.delete(index=mounted_name)
+                                loggit.debug("Unmounted index %s", mounted_name)
                             except Exception as e:
                                 loggit.warning(
-                                    "Failed to unmount index %s: %s", index_name, e
+                                    "Failed to unmount index %s: %s", mounted_name, e
                                 )
-                            skipped_indices.append(index_name)
+                            skipped_indices.append(mounted_name)
                     else:
                         loggit.warning(
                             "Could not determine date range for %s, keeping mounted",
-                            index_name,
+                            mounted_name,
                         )
 
                 except Exception as e:
                     loggit.warning(
                         "Error checking date range for index %s: %s, keeping mounted",
-                        index_name,
+                        mounted_name,
                         e,
                     )
 
                 if keep_mounted:
-                    mounted_indices.append(index_name)
+                    mounted_indices.append(mounted_name)
 
-                    datastream_name = get_index_datastream_name(client, index_name)
+                    datastream_name = get_index_datastream_name(client, mounted_name)
                     if datastream_name:
                         loggit.info(
                             "Index %s was part of data stream %s, attempting to re-add",
-                            index_name,
+                            mounted_name,
                             datastream_name,
                         )
-                        if add_index_to_datastream(client, datastream_name, index_name):
+                        if add_index_to_datastream(
+                            client, datastream_name, mounted_name
+                        ):
                             datastream_adds["successful"].append(
-                                {"index": index_name, "datastream": datastream_name}
+                                {"index": mounted_name, "datastream": datastream_name}
                             )
                         else:
                             datastream_adds["failed"].append(
-                                {"index": index_name, "datastream": datastream_name}
+                                {"index": mounted_name, "datastream": datastream_name}
                             )
                     else:
                         loggit.debug(
                             "Index %s is not a data stream backing index, skipping data stream step",
-                            index_name,
+                            mounted_name,
                         )
 
         except Exception as e:
