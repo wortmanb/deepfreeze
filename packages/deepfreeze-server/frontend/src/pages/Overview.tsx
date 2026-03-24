@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { trimDate } from '../api/util';
 import {
   EuiFlexGroup,
@@ -17,9 +17,12 @@ import {
   EuiFlyoutBody,
   EuiBasicTable,
   EuiBadge,
+  EuiDescriptionList,
+  EuiProgress,
   type EuiBasicTableColumn,
 } from '@elastic/eui';
 import { useStatus } from '../hooks/useStatus';
+import { api, type RestoreProgress } from '../api/client';
 import RefreshControl from '../components/RefreshControl';
 
 type Repo = Record<string, unknown>;
@@ -61,7 +64,7 @@ function thawStatusColor(s: string): string {
   }
 }
 
-// -- Column definitions for each detail flyout --
+// -- Column definitions for the list flyout --
 
 const repoColumns: EuiBasicTableColumn<Repo>[] = [
   { field: 'name', name: 'Name', sortable: true, render: (v: string) => <strong>{v}</strong> },
@@ -111,17 +114,82 @@ const ilmColumns: EuiBasicTableColumn<IlmPolicy>[] = [
   { field: 'templates_count', name: 'Templates', sortable: true },
 ];
 
-// -- Flyout config type --
+// -- Flyout config types --
 
 interface FlyoutConfig {
   title: string;
   items: Record<string, unknown>[];
   columns: EuiBasicTableColumn<Record<string, unknown>>[];
+  kind: 'repo' | 'thaw' | 'bucket' | 'ilm';
+}
+
+// -- Thaw detail helpers (same as ThawRequests page) --
+
+function formatElapsed(createdAt: string): string {
+  try {
+    const created = new Date(createdAt);
+    const now = new Date();
+    const totalSec = Math.max(0, Math.floor((now.getTime() - created.getTime()) / 1000));
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  } catch {
+    return '';
+  }
+}
+
+function ThawDetailContent({ item }: { item: ThawReq }) {
+  const [elapsed, setElapsed] = useState('');
+  const createdAt = String(item.created_at || '');
+
+  useEffect(() => {
+    if (!createdAt) return;
+    setElapsed(formatElapsed(createdAt));
+    const timer = setInterval(() => setElapsed(formatElapsed(createdAt)), 1000);
+    return () => clearInterval(timer);
+  }, [createdAt]);
+
+  const listItems = [
+    { title: 'Request ID', description: String(item.request_id || item.id || '--') },
+    { title: 'Status', description: String(item.status || '--') },
+    { title: 'Created At', description: createdAt ? `${trimDate(createdAt)}  (${elapsed} ago)` : '--' },
+    { title: 'Date Range', description: `${trimDate(item.start_date) || '?'} \u2192 ${trimDate(item.end_date) || '?'}` },
+  ];
+
+  return <EuiDescriptionList type="column" compressed listItems={listItems} />;
 }
 
 export default function Overview() {
   const { status, loading, error, refresh } = useStatus();
   const [flyout, setFlyout] = useState<FlyoutConfig | null>(null);
+
+  // Detail-level state (second flyout layer)
+  const [detailRepo, setDetailRepo] = useState<Repo | null>(null);
+  const [detailThaw, setDetailThaw] = useState<ThawReq | null>(null);
+  const [restoreProgress, setRestoreProgress] = useState<RestoreProgress[] | null>(null);
+  const [progressLoading, setProgressLoading] = useState(false);
+
+  const openThawDetail = useCallback((item: ThawReq) => {
+    setDetailThaw(item);
+    setRestoreProgress(null);
+    if (item.status === 'in_progress') {
+      const reqId = String(item.request_id || item.id || '');
+      if (reqId) {
+        setProgressLoading(true);
+        api.getRestoreProgress(reqId)
+          .then((data) => setRestoreProgress(data.repos))
+          .catch(() => setRestoreProgress(null))
+          .finally(() => setProgressLoading(false));
+      }
+    }
+  }, []);
+
+  const closeDetail = () => {
+    setDetailRepo(null);
+    setDetailThaw(null);
+    setRestoreProgress(null);
+  };
 
   if (loading && !status) {
     return (
@@ -158,10 +226,22 @@ export default function Overview() {
   };
 
   const openRepoFlyout = (title: string, state: string | null) => {
-    setFlyout({ title, items: reposByState(state), columns: repoColumns });
+    setFlyout({ title, items: reposByState(state), columns: repoColumns, kind: 'repo' });
   };
 
   const cardStyle = { cursor: 'pointer' };
+
+  // Row click handler for the list flyout table
+  const getRowProps = (item: Record<string, unknown>) => {
+    if (!flyout) return {};
+    if (flyout.kind === 'repo') {
+      return { onClick: () => setDetailRepo(item), style: { cursor: 'pointer' } };
+    }
+    if (flyout.kind === 'thaw') {
+      return { onClick: () => openThawDetail(item), style: { cursor: 'pointer' } };
+    }
+    return {};
+  };
 
   return (
     <>
@@ -236,7 +316,7 @@ export default function Overview() {
           <EuiPanel
             hasBorder
             style={cardStyle}
-            onClick={() => setFlyout({ title: 'Thaw Requests', items: status.thaw_requests, columns: thawColumns })}
+            onClick={() => setFlyout({ title: 'Thaw Requests', items: status.thaw_requests, columns: thawColumns, kind: 'thaw' })}
           >
             <EuiStat title={status.thaw_requests.length} description="Thaw Requests" titleColor="accent" />
           </EuiPanel>
@@ -245,7 +325,7 @@ export default function Overview() {
           <EuiPanel
             hasBorder
             style={cardStyle}
-            onClick={() => setFlyout({ title: 'Buckets', items: status.buckets, columns: bucketColumns })}
+            onClick={() => setFlyout({ title: 'Buckets', items: status.buckets, columns: bucketColumns, kind: 'bucket' })}
           >
             <EuiStat title={status.buckets.length} description="Buckets" titleColor="primary" />
           </EuiPanel>
@@ -254,7 +334,7 @@ export default function Overview() {
           <EuiPanel
             hasBorder
             style={cardStyle}
-            onClick={() => setFlyout({ title: 'ILM Policies', items: status.ilm_policies, columns: ilmColumns })}
+            onClick={() => setFlyout({ title: 'ILM Policies', items: status.ilm_policies, columns: ilmColumns, kind: 'ilm' })}
           >
             <EuiStat title={status.ilm_policies.length} description="ILM Policies" titleColor="primary" />
           </EuiPanel>
@@ -278,8 +358,8 @@ export default function Overview() {
         </>
       )}
 
-      {/* Detail flyout */}
-      {flyout && (
+      {/* List flyout (first level) */}
+      {flyout && !detailRepo && !detailThaw && (
         <EuiFlyout onClose={() => setFlyout(null)} size="l" ownFocus>
           <EuiFlyoutHeader hasBorder>
             <EuiTitle size="m">
@@ -290,8 +370,100 @@ export default function Overview() {
             <EuiBasicTable
               items={flyout.items}
               columns={flyout.columns}
+              rowProps={getRowProps}
               noItemsMessage={`No ${flyout.title.toLowerCase()} found`}
             />
+          </EuiFlyoutBody>
+        </EuiFlyout>
+      )}
+
+      {/* Repository detail flyout (second level) */}
+      {detailRepo && (
+        <EuiFlyout onClose={closeDetail} size="m" ownFocus>
+          <EuiFlyoutHeader hasBorder>
+            <EuiTitle size="m">
+              <h2>{String(detailRepo.name || 'Repository Details')}</h2>
+            </EuiTitle>
+          </EuiFlyoutHeader>
+          <EuiFlyoutBody>
+            <EuiDescriptionList
+              type="column"
+              compressed
+              listItems={Object.entries(detailRepo)
+                .filter(([, v]) => v !== null && v !== undefined)
+                .map(([key, value]) => ({
+                  title: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                  description:
+                    typeof value === 'object'
+                      ? JSON.stringify(value, null, 2)
+                      : String(value),
+                }))}
+            />
+          </EuiFlyoutBody>
+        </EuiFlyout>
+      )}
+
+      {/* Thaw request detail flyout (second level) */}
+      {detailThaw && (
+        <EuiFlyout onClose={closeDetail} size="m" ownFocus>
+          <EuiFlyoutHeader hasBorder>
+            <EuiTitle size="m">
+              <h2>
+                Thaw Request{' '}
+                <code>{String(detailThaw.request_id || '').substring(0, 8)}</code>
+              </h2>
+            </EuiTitle>
+          </EuiFlyoutHeader>
+          <EuiFlyoutBody>
+            <ThawDetailContent item={detailThaw} />
+
+            {Array.isArray(detailThaw.repositories) && detailThaw.repositories.length > 0 && (
+              <>
+                <EuiSpacer size="l" />
+                <EuiTitle size="xs">
+                  <h3>Repositories ({(detailThaw.repositories as unknown[]).length})</h3>
+                </EuiTitle>
+                <EuiSpacer size="s" />
+                {(detailThaw.repositories as Record<string, unknown>[]).map((repo, i) => (
+                  <div key={i} style={{ marginBottom: 8 }}>
+                    <EuiBadge color="hollow">
+                      {String(repo.name || repo.repository || repo)}
+                    </EuiBadge>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {detailThaw.status === 'in_progress' && (
+              <>
+                <EuiSpacer size="l" />
+                <EuiTitle size="xs">
+                  <h3>S3 Restore Progress</h3>
+                </EuiTitle>
+                <EuiSpacer size="s" />
+                {progressLoading && <EuiLoadingSpinner size="m" />}
+                {restoreProgress && restoreProgress.map((rp, i) => {
+                  const pct = rp.total > 0 ? Math.round((rp.restored / rp.total) * 100) : 0;
+                  return (
+                    <div key={i} style={{ marginBottom: 16 }}>
+                      <EuiText size="s"><strong>{rp.repo}</strong></EuiText>
+                      <EuiSpacer size="xs" />
+                      <EuiProgress value={rp.restored} max={rp.total} size="m" color={rp.complete ? 'success' : 'primary'} />
+                      <EuiSpacer size="xs" />
+                      <EuiText size="xs" color="subdued">
+                        {rp.restored}/{rp.total} restored ({pct}%)
+                        {rp.in_progress > 0 && ` \u00b7 ${rp.in_progress} in progress`}
+                        {rp.not_restored > 0 && ` \u00b7 ${rp.not_restored} pending`}
+                        {rp.complete && ' \u00b7 Complete'}
+                      </EuiText>
+                    </div>
+                  );
+                })}
+                {!progressLoading && !restoreProgress && (
+                  <EuiText size="s" color="subdued">Could not load restore progress.</EuiText>
+                )}
+              </>
+            )}
           </EuiFlyoutBody>
         </EuiFlyout>
       )}
