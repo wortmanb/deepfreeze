@@ -85,6 +85,26 @@ class JobManager:
         logger.info("Job %s submitted: %s %s", job_id, action_type, params)
         return JobSubmission(job_id=job_id, status=JobStatus.PENDING)
 
+    async def wait_for_job(self, job_id: str, timeout: float = 30.0) -> Job | None:
+        """Wait for a job to reach a terminal state.
+
+        Returns the Job if it completes within the timeout, or None if it
+        times out. The job keeps running regardless.
+        """
+        job = self._jobs.get(job_id)
+        if not job:
+            return None
+        task = self._tasks.get(job_id)
+        if not task:
+            return job
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            pass
+        return self._jobs.get(job_id)
+
     async def cancel(self, job_id: str) -> bool:
         """Cancel a running job. Returns True if cancelled."""
         job = self._jobs.get(job_id)

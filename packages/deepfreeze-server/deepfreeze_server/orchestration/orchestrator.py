@@ -42,8 +42,8 @@ logger = logging.getLogger("deepfreeze.server.orchestrator")
 class DeepfreezeOrchestrator:
     """Central orchestration layer for the deepfreeze server.
 
-    Coordinates StatusCache, JobManager, and EventBus. Absorbs the role of
-    the former DeepfreezeService but adds job tracking and event publishing.
+    Coordinates StatusCache, JobManager, and EventBus. All mutating actions
+    are submitted as background jobs via the JobManager.
     """
 
     def __init__(
@@ -83,14 +83,14 @@ class DeepfreezeOrchestrator:
     async def _job_cleanup_loop(self) -> None:
         """Periodically clean up old completed jobs."""
         while True:
-            await asyncio.sleep(300)  # every 5 minutes
+            await asyncio.sleep(300)
             removed = self.job_manager.cleanup_completed(max_age_seconds=3600)
             if removed:
                 logger.debug("Cleaned up %d old jobs", removed)
 
     # -- Action methods --
-    # Each creates a core action, runs it in a thread pool, and returns a CommandResult.
-    # Phase 2 will route these through JobManager for async tracking.
+    # Each submits a job to the JobManager and returns a JobSubmission.
+    # The job runs asynchronously; callers use wait_for_job for sync behavior.
 
     async def rotate(
         self,
@@ -98,7 +98,7 @@ class DeepfreezeOrchestrator:
         month: int | None = None,
         keep: int = 1,
         dry_run: bool = False,
-    ) -> CommandResult:
+    ) -> JobSubmission:
         action = Rotate(
             client=self._client,
             year=year,
@@ -107,10 +107,10 @@ class DeepfreezeOrchestrator:
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("rotate")
-        return result
+        return await self._submit_action(
+            "rotate", action, dry_run=dry_run,
+            params={"year": year, "month": month, "keep": keep, "dry_run": dry_run},
+        )
 
     async def thaw_create(
         self,
@@ -120,7 +120,7 @@ class DeepfreezeOrchestrator:
         duration: int = 7,
         tier: str = "Standard",
         dry_run: bool = False,
-    ) -> CommandResult:
+    ) -> JobSubmission:
         action = Thaw(
             client=self._client,
             start_date=start_date,
@@ -131,12 +131,16 @@ class DeepfreezeOrchestrator:
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("thaw")
-        return result
+        return await self._submit_action(
+            "thaw", action, dry_run=dry_run,
+            params={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "duration": duration, "tier": tier, "sync": sync, "dry_run": dry_run,
+            },
+        )
 
-    async def thaw_check(self, request_id: str | None = None) -> CommandResult:
+    async def thaw_check(self, request_id: str | None = None) -> JobSubmission:
         action = Thaw(
             client=self._client,
             request_id=request_id,
@@ -144,16 +148,17 @@ class DeepfreezeOrchestrator:
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=False)
-        if result.success:
-            await self._invalidate_and_notify("thaw_check")
-        return result
+        return await self._submit_action(
+            "thaw_check", action, dry_run=False,
+            params={"request_id": request_id},
+            invalidate=True,
+        )
 
     async def refreeze(
         self,
         request_id: str | None = None,
         dry_run: bool = False,
-    ) -> CommandResult:
+    ) -> JobSubmission:
         action = Refreeze(
             client=self._client,
             request_id=request_id,
@@ -161,37 +166,37 @@ class DeepfreezeOrchestrator:
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("refreeze")
-        return result
+        return await self._submit_action(
+            "refreeze", action, dry_run=dry_run,
+            params={"request_id": request_id, "dry_run": dry_run},
+        )
 
     async def cleanup(
         self,
         refrozen_retention_days: int | None = None,
         dry_run: bool = False,
-    ) -> CommandResult:
+    ) -> JobSubmission:
         action = Cleanup(
             client=self._client,
             refrozen_retention_days=refrozen_retention_days,
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("cleanup")
-        return result
+        return await self._submit_action(
+            "cleanup", action, dry_run=dry_run,
+            params={"refrozen_retention_days": refrozen_retention_days, "dry_run": dry_run},
+        )
 
-    async def repair_metadata(self, dry_run: bool = False) -> CommandResult:
+    async def repair_metadata(self, dry_run: bool = False) -> JobSubmission:
         action = RepairMetadata(
             client=self._client,
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("repair")
-        return result
+        return await self._submit_action(
+            "repair", action, dry_run=dry_run,
+            params={"dry_run": dry_run},
+        )
 
     async def setup(
         self,
@@ -200,7 +205,7 @@ class DeepfreezeOrchestrator:
         ilm_policy_name: str | None = None,
         index_template_name: str | None = None,
         dry_run: bool = False,
-    ) -> CommandResult:
+    ) -> JobSubmission:
         action = Setup(
             client=self._client,
             repo_name_prefix=repo_name_prefix,
@@ -210,10 +215,14 @@ class DeepfreezeOrchestrator:
             porcelain=True,
             audit=self._audit,
         )
-        result = await self._run_action(action, dry_run=dry_run)
-        if result.success and not dry_run:
-            await self._invalidate_and_notify("setup")
-        return result
+        return await self._submit_action(
+            "setup", action, dry_run=dry_run,
+            params={
+                "repo_name_prefix": repo_name_prefix,
+                "bucket_name_prefix": bucket_name_prefix,
+                "dry_run": dry_run,
+            },
+        )
 
     async def get_thaw_restore_progress(self, request_id: str) -> list[dict]:
         """Get S3 restore progress for each repo in a thaw request."""
@@ -221,6 +230,38 @@ class DeepfreezeOrchestrator:
         return await loop.run_in_executor(None, self._check_restore_progress, request_id)
 
     # -- Internal helpers --
+
+    async def _submit_action(
+        self,
+        action_type: str,
+        action,
+        dry_run: bool,
+        params: dict,
+        invalidate: bool | None = None,
+    ) -> JobSubmission:
+        """Submit a core action as a background job.
+
+        Args:
+            action_type: Name for display/tracking (rotate, thaw, etc.)
+            action: Instantiated core action object
+            dry_run: Whether this is a dry run
+            params: Parameters dict for audit/display
+            invalidate: Override cache invalidation. If None, invalidates
+                        on success when not a dry run.
+        """
+        should_invalidate = invalidate if invalidate is not None else (not dry_run)
+
+        async def run_fn() -> CommandResult:
+            result = await self._run_action(action, dry_run=dry_run)
+            if result.success and should_invalidate:
+                await self._invalidate_and_notify(action_type)
+            return result
+
+        return await self.job_manager.submit(
+            action_type=action_type,
+            params=params,
+            run_fn=run_fn,
+        )
 
     async def _run_action(self, action, dry_run: bool = False) -> CommandResult:
         """Run a core action in a thread pool and return structured result."""
