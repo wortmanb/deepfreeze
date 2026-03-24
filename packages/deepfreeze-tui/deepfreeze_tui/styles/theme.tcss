@@ -1,0 +1,165 @@
+/* Deepfreeze TUI - lazygit-style dark theme */
+
+/* -- Color tokens -- */
+$df-bg: #1a1c21;
+$df-fg: #dfe5ef;
+$df-border: #343842;
+$df-active: #008a5e;
+$df-dim: #7b7b7b;
+$df-primary: #0b64dd;
+$df-danger: #c61e25;
+
+/* -- Base -- */
+Screen {
+    background: $df-bg;
+    color: $df-fg;
+    layers: default overlay;
+}
+
+/* -- Main layout -- */
+#main {
+    layout: horizontal;
+    height: 1fr;
+    width: 100%;
+}
+
+#left-col {
+    width: 45;
+    min-width: 35;
+    max-width: 60;
+    layout: vertical;
+}
+
+#right-col {
+    width: 1fr;
+    layout: vertical;
+}
+
+/* -- Status bar at top -- */
+#status-bar {
+    height: 1;
+    background: #252830;
+    color: $df-fg;
+    padding: 0 1;
+    width: 100%;
+}
+
+/* -- Panels (all OptionLists and DetailPanel) -- */
+.panel {
+    border: solid $df-fg;
+    border-title-color: $df-fg;
+    border-title-style: bold;
+    border-title-align: left;
+    border-subtitle-color: $df-dim;
+    border-subtitle-align: right;
+    background: $df-bg;
+    height: 1fr;
+}
+
+/* Active panel gets green border */
+.panel:focus {
+    border: solid $df-active;
+    border-title-color: $df-active;
+}
+
+.panel:focus-within {
+    border: solid $df-active;
+    border-title-color: $df-active;
+}
+
+/* -- OptionList item styling -- */
+OptionList > .option-list--option-highlighted {
+    background: #252830;
+    color: $df-fg;
+}
+
+OptionList:focus > .option-list--option-highlighted {
+    background: $df-primary;
+    color: white;
+}
+
+OptionList > .option-list--option {
+    padding: 0 1;
+}
+
+/* -- Detail panel gets more space than command log -- */
+#detail-panel {
+    height: 2fr;
+}
+
+/* -- Detail tab contents -- */
+#detail-selected {
+    height: 1fr;
+}
+
+#detail-all-repos {
+    height: 1fr;
+    background: #1a1c21;
+}
+
+#all-repos-content {
+    padding: 0 1;
+}
+
+/* -- Detail content -- */
+#detail-content {
+    padding: 1 2;
+}
+
+/* -- Activity panel at bottom right -- */
+#activity-panel {
+    height: 1fr;
+    max-height: 14;
+}
+
+#activity-content {
+    padding: 0 1;
+}
+
+/* -- Footer -- */
+Footer {
+    background: #252830;
+    color: $df-fg;
+}
+
+Footer > .footer--key {
+    color: $df-active;
+    text-style: bold;
+}
+
+Footer > .footer--description {
+    color: $df-dim;
+}
+
+/* -- Repo panel gets more space -- */
+#repos {
+    height: 2fr;
+}
+
+/* -- Thaw panel -- */
+#thaw-requests {
+    height: 1fr;
+}
+
+/* -- Buckets and ILM are smaller -- */
+#buckets {
+    height: 1fr;
+    max-height: 8;
+}
+
+#ilm-policies {
+    height: 1fr;
+    max-height: 8;
+}
+
+/* -- Config panel: collapsed by default, expands on focus -- */
+#config-panel {
+    height: 3;
+}
+
+#config-panel:focus {
+    height: auto;
+    max-height: 20;
+}
+
+/* config-panel content gets padding via Static text */

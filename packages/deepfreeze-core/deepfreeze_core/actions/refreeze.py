@@ -10,6 +10,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.constants import (
     STATUS_INDEX,
     THAW_STATUS_COMPLETED,
@@ -23,7 +24,6 @@ from deepfreeze_core.exceptions import (
 from deepfreeze_core.helpers import Repository
 from deepfreeze_core.s3client import s3_client_factory
 from deepfreeze_core.utilities import (
-    get_all_indices_in_repo,
     get_repositories_by_names,
     get_settings,
     get_thaw_request,
@@ -62,6 +62,7 @@ class Refreeze:
         thaw_request_id: str = None,  # Alias for request_id (curator CLI uses this name)
         all_requests: bool = False,
         porcelain: bool = False,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.refreeze")
@@ -75,6 +76,7 @@ class Refreeze:
         self.request_id = request_id or thaw_request_id
         self.all_requests = all_requests
         self.porcelain = porcelain
+        self.audit = audit
 
         # Will be loaded during action
         self.settings = None
@@ -99,40 +101,77 @@ class Refreeze:
 
     def _delete_mounted_indices(self, repo: Repository) -> list:
         """
-        Delete indices that were mounted from a repository.
+        Delete all searchable snapshot indices backed by this repository.
+
+        Finds indices by checking store settings (reliable), then deletes them.
+        Data stream backing indices (.ds-*) are deleted via the data stream API.
 
         :param repo: The repository to delete indices from
-        :return: List of deleted index names
+        :return: List of deleted index/data-stream names
         """
-        deleted_indices = []
+        deleted = []
 
         try:
-            # Get all indices in the repository
-            indices = get_all_indices_in_repo(self.client, repo.name)
+            # Find all searchable snapshot indices backed by this repo
+            all_settings = self.client.indices.get_settings(index="*")
+            ss_indices = []
+            for index_name, data in all_settings.items():
+                store = (
+                    data.get("settings", {})
+                    .get("index", {})
+                    .get("store", {})
+                )
+                if store.get("type") == "snapshot" and (
+                    store.get("snapshot", {}).get("repository_name") == repo.name
+                ):
+                    ss_indices.append(index_name)
 
-            for index_name in indices:
-                # Check if index exists (might be mounted with different name patterns)
-                for pattern in [
-                    index_name,
-                    f"partial-{index_name}",
-                    f"restored-{index_name}",
-                ]:
-                    if self.client.indices.exists(index=pattern):
-                        self.loggit.info("Deleting mounted index %s", pattern)
-                        try:
-                            self.client.indices.delete(index=pattern)
-                            deleted_indices.append(pattern)
-                        except Exception as e:
-                            self.loggit.warning(
-                                "Failed to delete index %s: %s", pattern, e
-                            )
+            if not ss_indices:
+                self.loggit.info("No searchable snapshot indices found for %s", repo.name)
+                return deleted
+
+            self.loggit.info(
+                "Found %d searchable snapshot indices for %s: %s",
+                len(ss_indices), repo.name, ss_indices,
+            )
+
+            # Collect data streams that own any of these backing indices
+            ds_to_delete = set()
+            try:
+                ds_response = self.client.indices.get_data_stream(name="*")
+                for ds in ds_response.get("data_streams", []):
+                    ds_name = ds["name"]
+                    backing = {idx["index_name"] for idx in ds.get("indices", [])}
+                    if backing & set(ss_indices):
+                        ds_to_delete.add(ds_name)
+            except Exception as e:
+                self.loggit.debug("Could not list data streams: %s", e)
+
+            # Delete data streams first (removes their backing indices)
+            for ds_name in ds_to_delete:
+                try:
+                    self.loggit.info("Deleting data stream %s", ds_name)
+                    self.client.indices.delete_data_stream(name=ds_name)
+                    deleted.append(f"data_stream:{ds_name}")
+                except Exception as e:
+                    self.loggit.warning("Failed to delete data stream %s: %s", ds_name, e)
+
+            # Delete any remaining non-data-stream indices
+            for index_name in ss_indices:
+                try:
+                    if self.client.indices.exists(index=index_name):
+                        self.loggit.info("Deleting index %s", index_name)
+                        self.client.indices.delete(index=index_name)
+                        deleted.append(index_name)
+                except Exception as e:
+                    self.loggit.warning("Failed to delete index %s: %s", index_name, e)
 
         except Exception as e:
             self.loggit.warning(
                 "Could not get indices for repository %s: %s", repo.name, e
             )
 
-        return deleted_indices
+        return deleted
 
     def _refreeze_repository(self, repo: Repository, dry_run: bool = False) -> dict:
         """
@@ -237,6 +276,17 @@ class Refreeze:
         """
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
 
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="refreeze",
+                dry_run=True,
+                parameters={
+                    "request_id": self.request_id,
+                    "all_requests": self.all_requests,
+                },
+            )
+
         try:
             self._load_settings()
 
@@ -249,7 +299,33 @@ class Refreeze:
                         print(f"ERROR\t{result['error']}")
                     else:
                         self.console.print(f"[red]Error: {result['error']}[/red]")
+                    if tracker:
+                        tracker.add_error(
+                            {"code": "REQUEST_ERROR", "message": result["error"]}
+                        )
                     return
+
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "thaw_request",
+                            "action": "would_refreeze",
+                            "target": self.request_id,
+                            "status": "dry_run",
+                        }
+                    )
+                    for r in result.get("results", []):
+                        tracker.add_result(
+                            {
+                                "type": "repository",
+                                "action": "would_refreeze",
+                                "target": r["repo"],
+                                "status": "dry_run",
+                            }
+                        )
+                    tracker.set_summary(
+                        {"requests": 1, "repositories": len(result.get("results", []))}
+                    )
 
                 if self.porcelain:
                     print(f"DRY_RUN\trefreeze_request\t{self.request_id}")
@@ -279,7 +355,28 @@ class Refreeze:
                         self.console.print(
                             "[dim]No completed thaw requests to refreeze[/dim]"
                         )
+                    if tracker:
+                        tracker.set_summary({"requests": 0, "repositories": 0})
                     return
+
+                if tracker:
+                    for req in completed:
+                        tracker.add_result(
+                            {
+                                "type": "thaw_request",
+                                "action": "would_refeeze",
+                                "target": req.get("request_id"),
+                                "status": "dry_run",
+                            }
+                        )
+                    tracker.set_summary(
+                        {
+                            "requests": len(completed),
+                            "repositories": sum(
+                                len(req.get("repos", [])) for req in completed
+                            ),
+                        }
+                    )
 
                 if self.porcelain:
                     for req in completed:
@@ -319,13 +416,25 @@ class Refreeze:
                     self.console.print(
                         "[red]Error: Provide either --request-id or --all[/red]"
                     )
+                if tracker:
+                    tracker.add_error(
+                        {
+                            "code": "MISSING_PARAMS",
+                            "message": "Provide --request-id or --all",
+                        }
+                    )
 
         except (MissingIndexError, MissingSettingsError) as e:
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
                 self.console.print(f"[red]Error: {e}[/red]")
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             raise
+        finally:
+            if tracker and self.audit:
+                self.audit.commit(tracker)
 
     def do_action(self) -> None:
         """
@@ -335,6 +444,17 @@ class Refreeze:
         :rtype: None
         """
         self.loggit.debug("Starting Refreeze action")
+
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="refreeze",
+                dry_run=False,
+                parameters={
+                    "request_id": self.request_id,
+                    "all_requests": self.all_requests,
+                },
+            )
 
         try:
             self._load_settings()
@@ -355,12 +475,74 @@ class Refreeze:
                                 expand=False,
                             )
                         )
+                    if tracker:
+                        tracker.add_error(
+                            {"code": "REQUEST_ERROR", "message": result["error"]}
+                        )
                     return
+
+                # Track the request refrozen
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "thaw_request",
+                            "action": "refrozen",
+                            "target": self.request_id,
+                            "status": "success",
+                        }
+                    )
 
                 # Display results
                 results = result.get("results", [])
                 successful = [r for r in results if r["success"]]
                 failed = [r for r in results if not r["success"]]
+
+                # Track repository refreezes
+                if tracker:
+                    for r in results:
+                        deleted = r.get("deleted_indices", [])
+                        if r["success"]:
+                            # Log each deleted index/data-stream
+                            for idx in deleted:
+                                tracker.add_result(
+                                    {
+                                        "type": "data_stream" if idx.startswith("data_stream:") else "index",
+                                        "action": "deleted",
+                                        "target": idx.replace("data_stream:", ""),
+                                        "repository": r["repo"],
+                                    }
+                                )
+                            # Log the repo unmount
+                            tracker.add_result(
+                                {
+                                    "type": "repository",
+                                    "action": "unmounted_and_refrozen",
+                                    "target": r["repo"],
+                                    "status": "success",
+                                    "indices_removed": len(deleted),
+                                    "deleted_indices": deleted,
+                                }
+                            )
+                        else:
+                            tracker.add_result(
+                                {
+                                    "type": "repository",
+                                    "action": "refreeze_failed",
+                                    "target": r["repo"],
+                                    "status": "failed",
+                                    "error": r.get("error"),
+                                }
+                            )
+                    tracker.set_summary(
+                        {
+                            "requests_refrozen": 1,
+                            "repositories_refrozen": len(successful),
+                            "repositories_failed": len(failed),
+                            "total_indices_deleted": sum(
+                                len(r.get("deleted_indices", [])) for r in results
+                            ),
+                        }
+                    )
 
                 if self.porcelain:
                     for r in results:
@@ -412,9 +594,17 @@ class Refreeze:
                         self.console.print(
                             "[dim]No completed thaw requests to refreeze[/dim]"
                         )
+                    if tracker:
+                        tracker.set_summary(
+                            {"requests_refrozen": 0, "repositories_refrozen": 0}
+                        )
                     return
 
                 all_results = []
+                requests_refrozen = 0
+                repositories_refrozen = 0
+                repositories_failed = 0
+
                 for req in completed:
                     req_id = req.get("request_id", req.get("id"))
                     if self.porcelain:
@@ -426,6 +616,79 @@ class Refreeze:
 
                     result = self._refreeze_request(req_id)
                     all_results.append(result)
+
+                    # Track results for this request
+                    if tracker:
+                        if not result.get("error"):
+                            tracker.add_result(
+                                {
+                                    "type": "thaw_request",
+                                    "action": "refrozen",
+                                    "target": req_id,
+                                    "status": "success",
+                                }
+                            )
+                            requests_refrozen += 1
+                        else:
+                            tracker.add_result(
+                                {
+                                    "type": "thaw_request",
+                                    "action": "refrozen",
+                                    "target": req_id,
+                                    "status": "failed",
+                                    "error": result.get("error"),
+                                }
+                            )
+
+                        for r in result.get("results", []):
+                            deleted = r.get("deleted_indices", [])
+                            if r["success"]:
+                                for idx in deleted:
+                                    tracker.add_result(
+                                        {
+                                            "type": "data_stream" if idx.startswith("data_stream:") else "index",
+                                            "action": "deleted",
+                                            "target": idx.replace("data_stream:", ""),
+                                            "repository": r["repo"],
+                                        }
+                                    )
+                                tracker.add_result(
+                                    {
+                                        "type": "repository",
+                                        "action": "unmounted_and_refrozen",
+                                        "target": r["repo"],
+                                        "status": "success",
+                                        "indices_removed": len(deleted),
+                                        "deleted_indices": deleted,
+                                    }
+                                )
+                                repositories_refrozen += 1
+                            else:
+                                tracker.add_result(
+                                    {
+                                        "type": "repository",
+                                        "action": "refreeze_failed",
+                                        "target": r["repo"],
+                                        "status": "failed",
+                                        "error": r.get("error"),
+                                    }
+                                )
+                                repositories_failed += 1
+
+                total_indices = sum(
+                    len(r.get("deleted_indices", []))
+                    for res in all_results
+                    for r in res.get("results", [])
+                )
+                if tracker:
+                    tracker.set_summary(
+                        {
+                            "requests_refrozen": requests_refrozen,
+                            "repositories_refrozen": repositories_refrozen,
+                            "repositories_failed": repositories_failed,
+                            "total_indices_deleted": total_indices,
+                        }
+                    )
 
                 # Summary
                 total_repos = sum(len(r.get("results", [])) for r in all_results)
@@ -465,6 +728,13 @@ class Refreeze:
                             expand=False,
                         )
                     )
+                if tracker:
+                    tracker.add_error(
+                        {
+                            "code": "MISSING_PARAMS",
+                            "message": "Provide --request-id or --all",
+                        }
+                    )
 
         except (MissingIndexError, MissingSettingsError) as e:
             if self.porcelain:
@@ -480,6 +750,8 @@ class Refreeze:
                         expand=False,
                     )
                 )
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             raise
 
         except Exception as e:
@@ -497,4 +769,10 @@ class Refreeze:
                     )
                 )
             self.loggit.error("Refreeze failed: %s", e, exc_info=True)
+            if tracker:
+                tracker.add_error({"code": "UNEXPECTED", "message": str(e)})
             raise
+
+        finally:
+            if tracker and self.audit:
+                self.audit.commit(tracker)

@@ -9,7 +9,13 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from deepfreeze_core.constants import STATUS_INDEX, THAW_STATE_FROZEN
+from deepfreeze_core.audit import AuditLogger
+from deepfreeze_core.constants import (
+    STATUS_INDEX,
+    THAW_STATE_FROZEN,
+    THAW_STATE_THAWED,
+    THAW_STATE_THAWING,
+)
 from deepfreeze_core.exceptions import (
     MissingIndexError,
     MissingSettingsError,
@@ -63,6 +69,7 @@ class Rotate:
         year: int = None,
         month: int = None,
         porcelain: bool = False,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.rotate")
@@ -76,6 +83,7 @@ class Rotate:
         self.year = year
         self.month = month
         self.porcelain = porcelain
+        self.audit = audit
 
         # Will be loaded during action
         self.settings = None
@@ -142,7 +150,11 @@ class Rotate:
                     self.s3.create_bucket(new_bucket_name)
                     self.loggit.info("Created %s %s", storage_type, new_bucket_name)
                 else:
-                    self.loggit.info("%s %s already exists", storage_type.capitalize(), new_bucket_name)
+                    self.loggit.info(
+                        "%s %s already exists",
+                        storage_type.capitalize(),
+                        new_bucket_name,
+                    )
 
             # Create repository in Elasticsearch
             create_repo(
@@ -329,16 +341,23 @@ class Rotate:
         """
         archived_repos = []
 
-        # Get all repos matching our prefix
-        repos = get_matching_repos(
+        # Get all mounted repos matching our prefix
+        all_mounted = get_matching_repos(
             self.client, self.settings.repo_name_prefix, mounted=True
         )
 
-        # Sort by name (which includes suffix)
-        repos = sorted(repos, key=lambda r: r.name)
+        # Separate thawed/thawing repos — these have their own lifecycle
+        # (managed by refreeze, not rotation) and shouldn't count against keep
+        thaw_states = {THAW_STATE_THAWED, THAW_STATE_THAWING}
+        active_repos = sorted(
+            [r for r in all_mounted if r.thaw_state not in thaw_states],
+            key=lambda r: r.name,
+        )
 
-        # Keep the newest 'keep' repos mounted
-        repos_to_archive = repos[: -self.keep] if len(repos) > self.keep else []
+        # Keep the newest 'keep' active repos mounted
+        repos_to_archive = (
+            active_repos[: -self.keep] if len(active_repos) > self.keep else []
+        )
 
         skipped_repos = []
 
@@ -437,9 +456,9 @@ class Rotate:
             all_policies = self.client.ilm.get_lifecycle()
 
             # Get currently mounted repos
-            mounted_repos = set(get_matching_repo_names(
-                self.client, self.settings.repo_name_prefix
-            ))
+            mounted_repos = set(
+                get_matching_repo_names(self.client, self.settings.repo_name_prefix)
+            )
 
             for policy_name, policy_data in all_policies.items():
                 # Only check versioned policies matching our prefix
@@ -471,7 +490,9 @@ class Rotate:
                                 )
                                 if not dry_run:
                                     try:
-                                        self.client.ilm.delete_lifecycle(name=policy_name)
+                                        self.client.ilm.delete_lifecycle(
+                                            name=policy_name
+                                        )
                                         deleted_policies.append(policy_name)
                                     except Exception as e:
                                         self.loggit.error(
@@ -497,6 +518,18 @@ class Rotate:
         """
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
 
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="rotate",
+                dry_run=True,
+                parameters={
+                    "keep": self.keep,
+                    "year": self.year,
+                    "month": self.month,
+                },
+            )
+
         try:
             self._load_settings()
 
@@ -504,6 +537,11 @@ class Rotate:
             new_repo, new_bucket, base_path, new_suffix = self._create_new_repository(
                 dry_run=True
             )
+
+            if tracker:
+                tracker.add_result(
+                    {"type": "repository", "name": new_repo, "action": "would_create"}
+                )
 
             if self.porcelain:
                 print(f"DRY_RUN\tnew_repository\t{new_repo}\t{new_bucket}\t{base_path}")
@@ -523,6 +561,15 @@ class Rotate:
             # Show what repos would be archived
             repos_to_archive = self._archive_old_repos(dry_run=True)
             if repos_to_archive:
+                for repo in repos_to_archive:
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "repository",
+                                "name": repo,
+                                "action": "would_archive",
+                            }
+                        )
                 if self.porcelain:
                     for repo in repos_to_archive:
                         print(f"DRY_RUN\tarchive_repository\t{repo}")
@@ -542,6 +589,14 @@ class Rotate:
             # Show ILM policy updates
             if self.settings.ilm_policy_name:
                 old_suffix = self.settings.last_suffix
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "ilm_policy",
+                            "name": f"{self.settings.ilm_policy_name}-{new_suffix}",
+                            "action": "would_create",
+                        }
+                    )
                 if self.porcelain:
                     print(
                         f"DRY_RUN\tilm_policy\t{self.settings.ilm_policy_name}-{old_suffix}\t{self.settings.ilm_policy_name}-{new_suffix}"
@@ -561,6 +616,15 @@ class Rotate:
             # Show orphaned policies that would be deleted
             orphaned_policies = self._cleanup_orphaned_policies(dry_run=True)
             if orphaned_policies:
+                for policy in orphaned_policies:
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "ilm_policy",
+                                "name": policy,
+                                "action": "would_delete",
+                            }
+                        )
                 if self.porcelain:
                     for policy in orphaned_policies:
                         print(f"DRY_RUN\tdelete_policy\t{policy}")
@@ -577,12 +641,22 @@ class Rotate:
                         )
                     )
 
+            if tracker:
+                tracker.set_summary(
+                    {"new_repo": new_repo, "archived_count": len(repos_to_archive)}
+                )
+
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
                 self.console.print(f"[red]Error: {e}[/red]")
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
 
     def do_action(self) -> None:
         """
@@ -593,12 +667,29 @@ class Rotate:
         """
         self.loggit.debug("Starting Rotate action")
 
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="rotate",
+                dry_run=False,
+                parameters={
+                    "keep": self.keep,
+                    "year": self.year,
+                    "month": self.month,
+                },
+            )
+
         try:
             self._load_settings()
             old_suffix = self.settings.last_suffix
 
             # Create new repository
             new_repo, new_bucket, base_path, new_suffix = self._create_new_repository()
+
+            if tracker:
+                tracker.add_result(
+                    {"type": "repository", "name": new_repo, "action": "created"}
+                )
 
             if self.porcelain:
                 print(f"CREATED\trepository\t{new_repo}\t{new_bucket}\t{base_path}")
@@ -620,6 +711,11 @@ class Rotate:
                 new_repo, old_suffix, new_suffix
             )
             if updated_policies:
+                for policy in updated_policies:
+                    if tracker:
+                        tracker.add_result(
+                            {"type": "ilm_policy", "name": policy, "action": "updated"}
+                        )
                 if self.porcelain:
                     for policy in updated_policies:
                         print(f"UPDATED\tilm_policy\t{policy}")
@@ -659,6 +755,11 @@ class Rotate:
             # Archive old repositories
             archived = self._archive_old_repos()
             if archived:
+                for repo in archived:
+                    if tracker:
+                        tracker.add_result(
+                            {"type": "repository", "name": repo, "action": "archived"}
+                        )
                 if self.porcelain:
                     for repo in archived:
                         print(f"ARCHIVED\trepository\t{repo}")
@@ -716,7 +817,14 @@ class Rotate:
 
             self.loggit.info("Rotation completed. New repository: %s", new_repo)
 
+            if tracker:
+                tracker.set_summary(
+                    {"new_repo": new_repo, "archived_count": len(archived)}
+                )
+
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
@@ -733,6 +841,8 @@ class Rotate:
             raise
 
         except Exception as e:
+            if tracker:
+                tracker.add_error({"code": "UNEXPECTED_ERROR", "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\tunexpected\t{str(e)}")
             else:
@@ -748,3 +858,6 @@ class Rotate:
                 )
             self.loggit.error("Rotation failed: %s", e, exc_info=True)
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)

@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.constants import (
     STATUS_INDEX,
     THAW_STATUS_COMPLETED,
@@ -84,6 +85,7 @@ class Thaw:
         sync: bool = False,
         porcelain: bool = False,
         include_completed: bool = False,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.thaw")
@@ -105,6 +107,7 @@ class Thaw:
         self.sync = sync
         self.porcelain = porcelain
         self.include_completed = include_completed
+        self.audit = audit
 
         # Will be loaded during action
         self.settings = None
@@ -402,11 +405,12 @@ class Thaw:
 
             self.console.print(table)
 
-    def _initiate_thaw(self, dry_run: bool = False) -> str:
+    def _initiate_thaw(self, dry_run: bool = False, tracker=None) -> str:
         """
         Initiate a new thaw operation for the specified date range.
 
         :param dry_run: If True, don't actually initiate thaw
+        :param tracker: Optional audit tracker for recording results
         :return: The request ID
         """
         # Normalize dates to UTC
@@ -488,6 +492,18 @@ class Thaw:
             end,
         )
 
+        if tracker:
+            tracker.add_result(
+                {
+                    "type": "thaw_request",
+                    "action": "created",
+                    "request_id": request_id,
+                    "repo_count": len(repos),
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                }
+            )
+
         # Calculate expiration time
         expires_at = datetime.now(timezone.utc) + timedelta(days=self.restore_days)
 
@@ -513,6 +529,15 @@ class Thaw:
                     self.loggit.warning(
                         "No objects found in s3://%s/%s", repo.bucket, repo.base_path
                     )
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "repository",
+                                "repo_name": repo.name,
+                                "action": "restore_initiated",
+                                "status": "skipped_no_objects",
+                            }
+                        )
                     continue
 
                 # Initiate restore
@@ -528,6 +553,17 @@ class Thaw:
                 repo.start_thawing(expires_at)
                 repo.persist(self.client)
 
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "repository",
+                            "repo_name": repo.name,
+                            "action": "restore_initiated",
+                            "status": "success",
+                            "objects": len(objects),
+                        }
+                    )
+
                 if self.porcelain:
                     print(
                         f"INITIATED\t{repo.name}\t{len(objects)} objects\t{repo.bucket}"
@@ -539,12 +575,32 @@ class Thaw:
 
             except Exception as e:
                 self.loggit.error("Failed to initiate restore for %s: %s", repo.name, e)
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "repository",
+                            "repo_name": repo.name,
+                            "action": "restore_initiated",
+                            "status": "failed",
+                            "error": str(e),
+                        }
+                    )
                 if self.porcelain:
                     print(f"ERROR\trestore_failed\t{repo.name}\t{str(e)}")
                 else:
                     self.console.print(
                         f"  [red]Failed to restore {repo.name}: {escape(str(e))}[/red]"
                     )
+
+        if tracker:
+            tracker.set_summary(
+                {
+                    "request_id": request_id,
+                    "repo_count": len(repos),
+                    "restore_days": self.restore_days,
+                    "retrieval_tier": self.retrieval_tier,
+                }
+            )
 
         if not self.porcelain:
             self.console.print(
@@ -645,6 +701,24 @@ class Thaw:
         """
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
 
+        # Only audit dry-run thaw creation, not read-only queries
+        is_mutating = bool(self.start_date and self.end_date)
+        tracker = None
+        if self.audit and is_mutating:
+            tracker = self.audit.start_tracking(
+                action="thaw",
+                dry_run=True,
+                parameters={
+                    "start_date": self.start_date.isoformat()
+                    if self.start_date
+                    else None,
+                    "end_date": self.end_date.isoformat() if self.end_date else None,
+                    "sync": self.sync,
+                    "duration": self.restore_days,
+                    "retrieval_tier": self.retrieval_tier,
+                },
+            )
+
         try:
             self._load_settings()
 
@@ -657,7 +731,25 @@ class Thaw:
                 if request:
                     self._display_request_status(request)
             elif self.start_date and self.end_date:
-                self._initiate_thaw(dry_run=True)
+                request_id = self._initiate_thaw(dry_run=True)
+                if request_id and tracker:
+                    tracker.add_result(
+                        {
+                            "type": "thaw_request",
+                            "action": "would_create",
+                            "request_id": request_id,
+                            "start_date": self.start_date.isoformat(),
+                            "end_date": self.end_date.isoformat(),
+                        }
+                    )
+                    tracker.set_summary(
+                        {
+                            "mode": "create",
+                            "would_create_request_id": request_id,
+                            "restore_days": self.restore_days,
+                            "retrieval_tier": self.retrieval_tier,
+                        }
+                    )
             else:
                 if self.porcelain:
                     print("ERROR\tmissing_parameters\tProvide date range or request ID")
@@ -667,11 +759,16 @@ class Thaw:
                     )
 
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
                 self.console.print(f"[red]Error: {e}[/red]")
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
 
     def do_action(self) -> None:
         """
@@ -681,6 +778,25 @@ class Thaw:
         :rtype: None
         """
         self.loggit.debug("Starting Thaw action")
+
+        # Only audit mutating operations (initiating a thaw), not read-only
+        # queries like list, check-status, or check-all.
+        is_mutating = bool(self.start_date and self.end_date)
+        tracker = None
+        if self.audit and is_mutating:
+            tracker = self.audit.start_tracking(
+                action="thaw",
+                dry_run=False,
+                parameters={
+                    "start_date": self.start_date.isoformat()
+                    if self.start_date
+                    else None,
+                    "end_date": self.end_date.isoformat() if self.end_date else None,
+                    "sync": self.sync,
+                    "duration": self.restore_days,
+                    "retrieval_tier": self.retrieval_tier,
+                },
+            )
 
         try:
             self._load_settings()
@@ -699,7 +815,7 @@ class Thaw:
                         self._wait_for_completion(self.request_id)
 
             elif self.start_date and self.end_date:
-                request_id = self._initiate_thaw()
+                request_id = self._initiate_thaw(dry_run=False, tracker=tracker)
 
                 # If sync mode, wait for completion
                 if request_id and self.sync:
@@ -723,6 +839,8 @@ class Thaw:
                     )
 
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
@@ -739,6 +857,8 @@ class Thaw:
             raise
 
         except Exception as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\tunexpected\t{str(e)}")
             else:
@@ -754,3 +874,6 @@ class Thaw:
                 )
             self.loggit.error("Thaw failed: %s", e, exc_info=True)
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
