@@ -2,7 +2,7 @@
 
 Persistent daemon for deepfreeze — REST API, background job management, SSE push events, and the React/Elastic EUI frontend.
 
-Replaces `deepfreeze-web` and `deepfreeze-service` with a single server process that owns all state, scheduling, and job execution. CLI, TUI, and Web UI connect to it as thin clients.
+Persistent background daemon that owns all state, scheduling, and job execution. The CLI connects to it over HTTP; the Web UI is served directly.
 
 ## Installation
 
@@ -194,13 +194,15 @@ deepfreeze-server/
 │   │   ├── jobs.py             # GET/DELETE /api/jobs/*
 │   │   ├── events.py           # GET /api/events (SSE)
 │   │   ├── health.py           # GET /health, /ready
-│   │   ├── auth.py             # Auth middleware (Phase 5)
+│   │   ├── scheduler.py        # GET/POST/DELETE /api/scheduler/*
+│   │   ├── auth.py             # Token auth middleware
 │   │   └── deps.py             # Shared FastAPI dependencies
 │   ├── orchestration/          # Service layer
 │   │   ├── orchestrator.py     # Central coordinator
 │   │   ├── status_cache.py     # Pre-cached ES status
 │   │   ├── job_manager.py      # Background job tracking
-│   │   └── event_bus.py        # In-process pub/sub
+│   │   ├── event_bus.py        # In-process pub/sub
+│   │   └── scheduler.py       # APScheduler recurring jobs
 │   └── models/                 # Pydantic models
 │       ├── status.py, commands.py, jobs.py, events.py, errors.py
 └── frontend/                   # React/EUI SPA
@@ -212,14 +214,14 @@ Key design decisions:
 - **JobManager** tracks jobs in-memory; completed jobs are recorded in the ES audit index
 - All blocking ES/S3 calls run in thread pool executors to avoid blocking the event loop
 
-## Migration from deepfreeze-web
+## Capabilities
 
-The server is a drop-in replacement for `deepfreeze-web`. The API contract is identical — the same REST endpoints with the same request/response shapes. The React frontend works unchanged.
-
-New capabilities:
 - `/health` and `/ready` endpoints for operational monitoring
 - `/api/jobs` for tracking background job state
 - `/api/events` SSE endpoint for push updates
+- `/api/scheduler/jobs` for managing recurring scheduled jobs
+- Token-based auth with roles (admin/operator/viewer) — opt-in
+- TLS support via config
 - Background status cache refresh (no more per-request ES queries)
 - Automatic cache invalidation after mutating actions
 

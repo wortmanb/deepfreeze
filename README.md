@@ -9,9 +9,8 @@ Deepfreeze enables you to archive Elasticsearch searchable snapshots to S3 Glaci
 | Package | Description |
 |---------|-------------|
 | [deepfreeze-core](packages/deepfreeze-core/README.md) | Core domain logic library — actions, ES/S3 clients, audit |
-| [deepfreeze-cli](packages/deepfreeze-cli/README.md) | Standalone CLI tool |
+| [deepfreeze-cli](packages/deepfreeze-cli/README.md) | Standalone CLI tool (local or remote via server) |
 | [deepfreeze-server](packages/deepfreeze-server/README.md) | Persistent daemon — REST API, job management, SSE events, Web UI |
-| [deepfreeze-tui](packages/deepfreeze-tui/README.md) | Terminal UI (Textual) |
 
 ### deepfreeze-core
 
@@ -131,11 +130,8 @@ pytest tests/
 deepfreeze/
 ├── packages/
 │   ├── deepfreeze-core/       # Core domain logic library
-│   ├── deepfreeze-cli/        # Standalone CLI
-│   ├── deepfreeze-server/     # Persistent daemon (REST + SSE + Web UI)
-│   ├── deepfreeze-tui/        # Terminal UI
-│   ├── deepfreeze-service/    # (legacy — absorbed into server)
-│   └── deepfreeze-web/        # (legacy — absorbed into server)
+│   ├── deepfreeze-cli/        # Standalone CLI (local + remote)
+│   └── deepfreeze-server/     # Persistent daemon (REST + SSE + Web UI)
 ├── tests/
 └── .github/workflows/
 ```
