@@ -46,6 +46,12 @@ def main():
         help="Allowed CORS origin (repeatable)",
         default=None,
     )
+    parser.add_argument(
+        "--no-tls",
+        action="store_true",
+        help="Disable TLS even if configured (for development)",
+        default=False,
+    )
 
     args = parser.parse_args()
 
@@ -66,7 +72,15 @@ def main():
     from .app import create_app
 
     app = create_app(config_path=config_path, cors_origins=args.cors_origins)
-    uvicorn.run(app, host=host, port=port, reload=args.reload)
+
+    # TLS support
+    ssl_kwargs = {}
+    if server_config.tls and not args.no_tls:
+        ssl_kwargs["ssl_certfile"] = server_config.tls.cert
+        ssl_kwargs["ssl_keyfile"] = server_config.tls.key
+        print(f"TLS enabled: cert={server_config.tls.cert}")
+
+    uvicorn.run(app, host=host, port=port, reload=args.reload, **ssl_kwargs)
 
 
 if __name__ == "__main__":

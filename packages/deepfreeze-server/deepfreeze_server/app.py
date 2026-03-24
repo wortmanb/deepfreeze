@@ -60,8 +60,9 @@ def create_app(
     app.state.config_path = config_path
     app.state.server_config = server_config
     app.state.raw_config = raw_config
+    app.state.auth_config = server_config.auth
 
-    # Auth middleware (Phase 5 stub)
+    # Auth middleware — no-op when no tokens configured
     app.add_middleware(AuthMiddleware)
 
     # API routes

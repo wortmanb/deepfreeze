@@ -23,6 +23,27 @@ class ScheduledJobConfig(BaseModel):
     interval_seconds: int | None = None  # alternative: run every N seconds
 
 
+class AuthTokenConfig(BaseModel):
+    """A configured API token with associated roles."""
+
+    name: str
+    token: str
+    roles: list[str] = Field(default_factory=lambda: ["admin"])
+
+
+class TLSConfig(BaseModel):
+    """TLS certificate configuration."""
+
+    cert: str  # path to certificate file
+    key: str  # path to private key file
+
+
+class AuthConfig(BaseModel):
+    """Authentication configuration."""
+
+    tokens: list[AuthTokenConfig] = Field(default_factory=list)
+
+
 class ServerConfig(BaseModel):
     """Top-level server configuration."""
 
@@ -31,6 +52,8 @@ class ServerConfig(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     refresh_interval: float = 30.0
     scheduled_jobs: list[ScheduledJobConfig] = Field(default_factory=list)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
+    tls: TLSConfig | None = None
 
 
 def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, dict[str, Any]]:
@@ -59,12 +82,28 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
         if isinstance(j, dict) and "name" in j and "action" in j:
             scheduled_jobs.append(ScheduledJobConfig(**j))
 
+    # Parse auth config
+    raw_auth = server_section.get("auth", {})
+    auth_tokens = []
+    for t in raw_auth.get("tokens", []):
+        if isinstance(t, dict) and "name" in t and "token" in t:
+            auth_tokens.append(AuthTokenConfig(**t))
+    auth_config = AuthConfig(tokens=auth_tokens)
+
+    # Parse TLS config
+    tls_config = None
+    raw_tls = server_section.get("tls", {})
+    if raw_tls.get("cert") and raw_tls.get("key"):
+        tls_config = TLSConfig(cert=raw_tls["cert"], key=raw_tls["key"])
+
     server = ServerConfig(
         host=os.environ.get("DEEPFREEZE_HOST", server_section.get("host", "0.0.0.0")),
         port=int(os.environ.get("DEEPFREEZE_PORT", server_section.get("port", 8000))),
         cors_origins=server_section.get("cors_origins", ["*"]),
         refresh_interval=float(server_section.get("refresh_interval", 30.0)),
         scheduled_jobs=scheduled_jobs,
+        auth=auth_config,
+        tls=tls_config,
     )
 
     return server, raw
