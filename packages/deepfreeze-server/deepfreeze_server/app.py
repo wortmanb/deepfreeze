@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from deepfreeze_core.esclient import create_es_client
 
-from .api import actions, events, health, jobs, status
+from .api import actions, events, health, jobs, scheduler, status
 from .api.auth import AuthMiddleware
 from .config import ServerConfig, get_elasticsearch_config, load_server_config
 from .orchestration.orchestrator import DeepfreezeOrchestrator
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
         refresh_interval=server_cfg.refresh_interval,
     )
     app.state.orchestrator = orchestrator
-    await orchestrator.start()
+    await orchestrator.start(scheduled_jobs=server_cfg.scheduled_jobs)
     yield
     await orchestrator.stop()
 
@@ -70,6 +70,7 @@ def create_app(
     app.include_router(actions.router, prefix="/api", tags=["actions"])
     app.include_router(jobs.router, prefix="/api", tags=["jobs"])
     app.include_router(events.router, prefix="/api", tags=["events"])
+    app.include_router(scheduler.router, prefix="/api", tags=["scheduler"])
 
     # Serve React frontend (production) if it exists.
     # The catch-all explicitly skips API prefixes to prevent shadowing.

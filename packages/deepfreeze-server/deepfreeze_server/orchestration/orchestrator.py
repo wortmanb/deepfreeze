@@ -28,12 +28,14 @@ from deepfreeze_core.utilities import (
     get_thaw_request,
 )
 
+from ..config import ScheduledJobConfig
 from ..models.commands import CommandResult
 from ..models.errors import map_exception_to_error
 from ..models.events import Event, EventChannel, EventType
 from ..models.jobs import JobSubmission
 from .event_bus import EventBus
 from .job_manager import JobManager
+from .scheduler import DeepfreezeScheduler
 from .status_cache import StatusCache
 
 logger = logging.getLogger("deepfreeze.server.orchestrator")
@@ -60,16 +62,21 @@ class DeepfreezeOrchestrator:
             refresh_interval=refresh_interval,
         )
         self.job_manager = JobManager(event_bus=self.event_bus)
+        self.scheduler = DeepfreezeScheduler(orchestrator=self)
         self._cleanup_task: asyncio.Task | None = None
 
-    async def start(self) -> None:
-        """Start background services (cache refresh, job cleanup, etc.)."""
+    async def start(
+        self, scheduled_jobs: list[ScheduledJobConfig] | None = None
+    ) -> None:
+        """Start background services (cache refresh, scheduler, job cleanup)."""
         await self.status_cache.start()
+        await self.scheduler.start(extra_jobs=scheduled_jobs)
         self._cleanup_task = asyncio.create_task(self._job_cleanup_loop())
         logger.info("Orchestrator started")
 
     async def stop(self) -> None:
         """Stop background services."""
+        await self.scheduler.stop()
         await self.status_cache.stop()
         self.job_manager.shutdown()
         if self._cleanup_task:

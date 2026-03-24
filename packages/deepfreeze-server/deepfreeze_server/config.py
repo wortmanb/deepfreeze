@@ -13,6 +13,16 @@ logger = logging.getLogger("deepfreeze.server.config")
 DEFAULT_CONFIG_PATH = Path.home() / ".deepfreeze" / "config.yml"
 
 
+class ScheduledJobConfig(BaseModel):
+    """A single scheduled job definition from config."""
+
+    name: str
+    action: str  # rotate, thaw_check, cleanup, repair, refreeze
+    params: dict[str, Any] = Field(default_factory=dict)
+    cron: str | None = None  # cron expression (e.g., "0 2 1 * *")
+    interval_seconds: int | None = None  # alternative: run every N seconds
+
+
 class ServerConfig(BaseModel):
     """Top-level server configuration."""
 
@@ -20,6 +30,7 @@ class ServerConfig(BaseModel):
     port: int = 8000
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
     refresh_interval: float = 30.0
+    scheduled_jobs: list[ScheduledJobConfig] = Field(default_factory=list)
 
 
 def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, dict[str, Any]]:
@@ -41,11 +52,19 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
             logger.warning("Failed to load config from %s: %s", path, e)
 
     server_section = raw.get("server", {})
+    # Parse scheduled jobs from config
+    raw_jobs = server_section.get("scheduled_jobs", [])
+    scheduled_jobs = []
+    for j in raw_jobs:
+        if isinstance(j, dict) and "name" in j and "action" in j:
+            scheduled_jobs.append(ScheduledJobConfig(**j))
+
     server = ServerConfig(
         host=os.environ.get("DEEPFREEZE_HOST", server_section.get("host", "0.0.0.0")),
         port=int(os.environ.get("DEEPFREEZE_PORT", server_section.get("port", 8000))),
         cors_origins=server_section.get("cors_origins", ["*"]),
         refresh_interval=float(server_section.get("refresh_interval", 30.0)),
+        scheduled_jobs=scheduled_jobs,
     )
 
     return server, raw

@@ -28,6 +28,7 @@ dependencies = [
     "elasticsearch8>=8.0.0",
     "sse-starlette>=1.6.0",
     "pyyaml>=6.0.0",
+    "apscheduler>=3.10.0,<4.0.0",
 ]
 
 [project.optional-dependencies]
