@@ -32,9 +32,13 @@ class TestPrerequisites:
 
     def test_storage_connectivity(self, storage_provider):
         """Storage provider client can connect."""
-        from deepfreeze_core.s3client import s3_client_factory
+        try:
+            from deepfreeze_core.s3client import s3_client_factory
 
-        s3 = s3_client_factory(storage_provider)
+            s3 = s3_client_factory(storage_provider)
+        except (ImportError, ModuleNotFoundError) as e:
+            pytest.skip(f"Storage SDK for '{storage_provider}' not installed: {e}")
+
         assert s3.test_connection(), (
             f"Storage provider '{storage_provider}' failed connection test"
         )

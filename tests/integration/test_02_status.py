@@ -18,8 +18,11 @@ def runner():
 class TestStatusCLI:
     """Status command via CliRunner — all assertions use --porcelain."""
 
-    def test_status_exits_zero(self, runner, test_config_file):
-        """Status command should succeed."""
+    def test_status_exits_zero(self, runner, test_config_file, cluster_initialized):
+        """Status command should succeed on an initialized cluster."""
+        if not cluster_initialized:
+            pytest.skip("Cluster not initialized — status requires setup")
+
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
@@ -27,8 +30,11 @@ class TestStatusCLI:
         ])
         assert result.exit_code == 0, f"Status failed:\n{result.output}"
 
-    def test_status_porcelain_parseable(self, runner, test_config_file):
+    def test_status_porcelain_parseable(self, runner, test_config_file, cluster_initialized):
         """Porcelain output should be valid JSON with expected keys."""
+        if not cluster_initialized:
+            pytest.skip("Cluster not initialized — status requires setup")
+
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
@@ -39,6 +45,22 @@ class TestStatusCLI:
         assert "settings" in data
         assert "repositories" in data
         assert "thaw_requests" in data
+
+    def test_status_on_fresh_cluster(self, runner, test_config_file, cluster_initialized):
+        """On a fresh cluster, status should return a clear error in JSON."""
+        if cluster_initialized:
+            pytest.skip("Cluster already initialized")
+
+        result = runner.invoke(cli, [
+            "--config", test_config_file,
+            "--local",
+            "status", "--porcelain",
+        ])
+        # Status should exit non-zero with a helpful error
+        assert result.exit_code != 0
+        data = json.loads(result.output.strip())
+        assert "error" in data
+        assert "status_index_missing" in data["error"]
 
     def test_status_shows_repos(self, runner, test_config_file, live_repo_prefix, cluster_initialized):
         """Status should show repositories matching the configured prefix."""
