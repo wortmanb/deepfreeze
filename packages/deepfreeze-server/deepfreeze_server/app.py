@@ -74,8 +74,12 @@ def create_app(
     app.include_router(scheduler.router, prefix="/api", tags=["scheduler"])
 
     # Serve React frontend (production) if it exists.
-    # The catch-all explicitly skips API prefixes to prevent shadowing.
-    frontend_build = Path(__file__).parent.parent / "frontend" / "dist"
+    # Check two locations:
+    #   1. Inside the package (pip install): deepfreeze_server/static/
+    #   2. Development (pip install -e): ../frontend/dist/
+    frontend_build = Path(__file__).parent / "static"
+    if not frontend_build.is_dir():
+        frontend_build = Path(__file__).parent.parent / "frontend" / "dist"
     if frontend_build.is_dir():
         app.mount(
             "/assets",

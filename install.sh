@@ -119,6 +119,25 @@ fi
 
 echo ""
 
+# -- Build frontend (before pip install so assets get packaged) --
+STATIC_DIR="${SCRIPT_DIR}/packages/deepfreeze-server/deepfreeze_server/static"
+if ! $CLI_ONLY; then
+  FRONTEND_DIR="${SCRIPT_DIR}/packages/deepfreeze-server/frontend"
+  if [[ -f "${FRONTEND_DIR}/package.json" ]]; then
+    info "Building web frontend..."
+    (cd "$FRONTEND_DIR" && npm install --silent 2>&1 | tail -1)
+    ok "npm dependencies installed"
+    (cd "$FRONTEND_DIR" && npm run build --silent 2>&1 | tail -1)
+    ok "Frontend built"
+
+    # Copy built assets into the Python package so pip install includes them
+    rm -rf "$STATIC_DIR"
+    cp -r "${FRONTEND_DIR}/dist" "$STATIC_DIR"
+    ok "Frontend assets copied to package"
+  fi
+  echo ""
+fi
+
 # -- Install Python packages --
 info "Installing Python packages..."
 
@@ -140,19 +159,6 @@ if ! $CLI_ONLY; then
 fi
 
 echo ""
-
-# -- Build frontend --
-if ! $CLI_ONLY; then
-  FRONTEND_DIR="${SCRIPT_DIR}/packages/deepfreeze-server/frontend"
-  if [[ -f "${FRONTEND_DIR}/package.json" ]]; then
-    info "Building web frontend..."
-    (cd "$FRONTEND_DIR" && npm install --silent 2>&1 | tail -1)
-    ok "npm dependencies installed"
-    (cd "$FRONTEND_DIR" && npm run build --silent 2>&1 | tail -1)
-    ok "Frontend built (${FRONTEND_DIR}/dist/)"
-  fi
-  echo ""
-fi
 
 # -- Scaffold config --
 if [[ ! -f "$CONFIG_FILE" ]]; then
