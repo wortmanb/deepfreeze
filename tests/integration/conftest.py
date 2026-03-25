@@ -101,14 +101,34 @@ def es_client(integration_config):
 
 
 @pytest.fixture(scope="session")
-def storage_provider(integration_config):
-    """The cloud storage provider from config (aws/azure/gcp)."""
-    # Check if there's a storage section to infer provider,
-    # otherwise default to aws
+def storage_provider(integration_config, live_settings):
+    """The cloud storage provider.
+
+    Priority:
+    1. DEEPFREEZE_TEST_PROVIDER env var
+    2. Provider from live cluster settings (if initialized)
+    3. First provider in config with importable SDK
+    4. 'aws' as fallback
+    """
+    # Explicit override
+    env_provider = os.environ.get("DEEPFREEZE_TEST_PROVIDER")
+    if env_provider:
+        return env_provider
+
+    # From live settings
+    if live_settings and live_settings.get("provider"):
+        return live_settings["provider"]
+
+    # Detect from config — pick first provider whose SDK is importable
     storage = integration_config.get("storage", {})
-    for provider in ("gcp", "azure", "aws"):
+    sdk_imports = {"aws": "boto3", "azure": "azure.storage.blob", "gcp": "google.cloud.storage"}
+    for provider in ("aws", "gcp", "azure"):
         if provider in storage:
-            return provider
+            try:
+                __import__(sdk_imports[provider])
+                return provider
+            except ImportError:
+                continue
     return "aws"
 
 

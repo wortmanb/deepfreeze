@@ -39,8 +39,11 @@ class TestActionsAPI:
         data = resp.json()
         assert data.get("action") == "repairmetadata" or "repair" in data.get("action", "")
 
-    def test_rotate_real(self, http_client):
-        """POST /actions/rotate (real) should succeed."""
+    def test_rotate_real(self, http_client, cluster_initialized):
+        """POST /actions/rotate (real) should succeed on initialized cluster."""
+        if not cluster_initialized:
+            pytest.skip("Cluster not initialized — rotate requires setup")
+
         resp = http_client.post(
             "/actions/rotate?wait=true&timeout=120",
             json={"dry_run": False},
