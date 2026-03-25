@@ -9,7 +9,6 @@ When no tokens are configured, all requests are allowed (open mode).
 """
 
 import logging
-from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request

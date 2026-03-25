@@ -15,13 +15,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-import botocore
 from elasticsearch8 import Elasticsearch, NotFoundError
 
 from deepfreeze_core.constants import SETTINGS_ID, STATUS_INDEX
 from deepfreeze_core.exceptions import ActionError, MissingIndexError
 from deepfreeze_core.helpers import Repository, Settings
 from deepfreeze_core.s3client import S3Client
+
+loggit = logging.getLogger("deepfreeze.utilities")
 
 
 def push_to_glacier(
@@ -45,7 +46,7 @@ def push_to_glacier(
     :return: True if archiving completed (may have partial failures), False on error
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     try:
         # Normalize base_path: remove leading/trailing slashes
@@ -118,7 +119,7 @@ def repo_has_active_indices(client: Elasticsearch, repo_name: str) -> tuple[bool
     :returns: Tuple of (has_active_indices, list_of_index_names)
     :rtype: tuple[bool, list]
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     active_indices = []
 
     try:
@@ -228,7 +229,7 @@ def ensure_settings_index(
 
     :raises MissingIndexError: If the index doesn't exist and create_if_missing is False
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     if create_if_missing:
         if not client.indices.exists(index=STATUS_INDEX):
@@ -308,7 +309,7 @@ def get_settings(client: Elasticsearch) -> Settings:
         >>> get_settings(client)
         Settings(repo_name_prefix='deepfreeze', ...)
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     if not client.indices.exists(index=STATUS_INDEX):
         raise MissingIndexError(f"Status index {STATUS_INDEX} is missing")
     try:
@@ -337,7 +338,7 @@ def save_settings(client: Elasticsearch, settings: Settings) -> None:
 
     :raises ActionError: If the settings document cannot be created or updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     try:
         client.get(index=STATUS_INDEX, id=SETTINGS_ID)
         loggit.info("Settings document already exists, updating it")
@@ -380,7 +381,7 @@ def create_repo(
 
     :raises ActionError: If the repository cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info(
         "Creating repo %s using bucket %s (provider: %s)",
         repo_name,
@@ -478,7 +479,7 @@ def get_repository(client: Elasticsearch, name: str) -> Repository:
 
     :raises Exception: If the repository does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     logging.debug("Getting repository %s", name)
     try:
         doc = client.search(
@@ -587,7 +588,6 @@ def get_matching_repos(
         ]
         logging.debug("Mounted repos: %s", mounted_repos)
         return [Repository(**repo["_source"]) for repo in mounted_repos]
-    # return a Repository object for each
     return [Repository(**repo["_source"], docid=repo["_id"]) for repo in repos]
 
 
@@ -606,7 +606,7 @@ def unmount_repo(client: Elasticsearch, repo: str) -> Repository:
 
     :raises Exception: If the repository does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     # Get repository info from Elasticsearch
     repo_info = client.snapshot.get_repository(name=repo)[repo]
     # Handle different providers: AWS/GCP use "bucket", Azure uses "container"
@@ -694,7 +694,7 @@ def create_ilm_policy(
 
     :raises ActionError: If the policy cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Creating ILM policy %s", policy_name)
     try:
         client.ilm.put_lifecycle(name=policy_name, body=policy_body)
@@ -715,7 +715,7 @@ def get_ilm_policy(client: Elasticsearch, policy_name: str) -> dict:
     :returns: The policy dictionary if found, None otherwise
     :rtype: dict | None
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting ILM policy %s", policy_name)
     try:
         policies = client.ilm.get_lifecycle(name=policy_name)
@@ -756,7 +756,7 @@ def create_or_update_ilm_policy(
 
     :raises ActionError: If the policy cannot be created or updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     # Define the default policy with reasonable tiering strategy
     default_policy_body = {
@@ -872,7 +872,7 @@ def update_index_template_ilm_policy(
 
     :raises ActionError: If the template cannot be updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info(
         "Updating index template %s to use ILM policy %s",
         template_name,
@@ -1031,7 +1031,7 @@ def create_thawed_ilm_policy(client: Elasticsearch, repo_name: str) -> str:
     :returns: The created policy name
     :rtype: str
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     policy_name = f"{repo_name}-thawed"
     policy_body = {
@@ -1091,7 +1091,7 @@ def update_repository_date_range(client: Elasticsearch, repo: Repository) -> boo
     :returns: True if dates were updated, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Updating date range for repository %s (mounted: %s)",
         repo.name,
@@ -1243,7 +1243,7 @@ def find_repos_by_date_range(
 
     :raises Exception: If the status index does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Finding repositories with data between %s and %s",
         start.isoformat(),
@@ -1292,7 +1292,7 @@ def check_restore_status(s3: S3Client, bucket: str, base_path: str) -> dict:
     :returns: A dictionary with restoration status information
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Checking restore status for s3://%s/%s", bucket, base_path)
 
     # Normalize base_path
@@ -1412,7 +1412,7 @@ def mount_repo(client: Elasticsearch, repo: Repository) -> None:
 
     :raises ActionError: If the repository cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Mounting repository %s", repo.name)
 
     # Get settings to retrieve provider and storage settings
@@ -1498,7 +1498,7 @@ def save_thaw_request(
 
     :raises ActionError: If the request cannot be saved
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Saving thaw request %s", request_id)
 
     request_doc = {
@@ -1536,7 +1536,7 @@ def get_thaw_request(client: Elasticsearch, request_id: str) -> dict:
 
     :raises ActionError: If the request is not found
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Retrieving thaw request %s", request_id)
 
     try:
@@ -1562,7 +1562,7 @@ def list_thaw_requests(client: Elasticsearch) -> list:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Listing all thaw requests")
 
     query = {"query": {"term": {"doctype": "thaw_request"}}, "size": 10000}
@@ -1600,7 +1600,7 @@ def update_thaw_request(
 
     :raises ActionError: If the update fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Updating thaw request %s", request_id)
 
     update_doc = {}
@@ -1630,7 +1630,7 @@ def get_repositories_by_names(client: Elasticsearch, repo_names: list) -> list:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting repositories by names: %s", repo_names)
 
     if not repo_names:
@@ -1673,7 +1673,7 @@ def get_index_templates(client: Elasticsearch) -> dict:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting legacy index templates")
     try:
         return client.indices.get_template()
@@ -1694,7 +1694,7 @@ def get_composable_templates(client: Elasticsearch) -> dict:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting composable index templates")
     try:
         return client.indices.get_index_template()
@@ -1729,7 +1729,7 @@ def update_template_ilm_policy(
 
     :raises ActionError: If the update fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Updating template %s from policy %s to %s",
         template_name,
@@ -1858,7 +1858,7 @@ def create_versioned_ilm_policy(
 
     :raises ActionError: If policy creation fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     new_policy_name = f"{base_policy_name}-{suffix}"
 
@@ -1906,7 +1906,7 @@ def get_policies_for_repo(client: Elasticsearch, repo_name: str) -> dict:
     :returns: Dictionary of policy names to policy bodies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Finding policies that reference repository %s", repo_name)
 
     policies = client.ilm.get_lifecycle()
@@ -1947,7 +1947,7 @@ def get_policies_by_suffix(client: Elasticsearch, suffix: str) -> dict:
     :returns: Dictionary of policy names to policy bodies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Finding policies ending with suffix -%s", suffix)
 
     policies = client.ilm.get_lifecycle()
@@ -1976,7 +1976,7 @@ def is_policy_safe_to_delete(client: Elasticsearch, policy_name: str) -> bool:
     :returns: True if safe to delete, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Checking if policy %s is safe to delete", policy_name)
 
     try:
@@ -2030,7 +2030,7 @@ def find_snapshots_for_index(
     :returns: List of snapshot names containing the index
     :rtype: list[str]
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Finding snapshots containing index %s in repo %s", index_name, repo_name
     )
@@ -2082,7 +2082,7 @@ def mount_snapshot_index(
     :returns: True if successful, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
     # but mounted indices should use the original name. We need to use
@@ -2204,7 +2204,7 @@ def wait_for_index_ready(
     :returns: True if index is ready, False if timeout
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Waiting for index %s to be ready", index_name)
 
     start_time = time.time()
@@ -2243,7 +2243,7 @@ def get_index_datastream_name(client: Elasticsearch, index_name: str) -> str:
     :returns: The data stream name if the index was part of one, None otherwise
     :rtype: str
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     try:
         settings = client.indices.get_settings(index=index_name)
@@ -2302,7 +2302,7 @@ def add_index_to_datastream(
     :returns: True if successful, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Adding index %s to data stream %s", index_name, datastream_name)
 
     try:
@@ -2363,7 +2363,7 @@ def find_and_mount_indices_in_date_range(
     :returns: Dictionary with mounted, skipped, failed counts, and created policies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info(
         "Finding and mounting indices between %s and %s",
         start_date.isoformat(),
