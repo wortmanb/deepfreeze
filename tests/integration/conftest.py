@@ -185,6 +185,7 @@ def test_index_template(es_client, test_prefixes):
         name=template_name,
         body={
             "index_patterns": [pattern],
+            "data_stream": {},
             "template": {
                 "settings": {"number_of_shards": 1, "number_of_replicas": 0},
             },
@@ -297,7 +298,19 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
     except Exception:
         pass
 
-    # 4. Status and audit indices (created by setup)
+    # 4. Data streams matching prefix
+    try:
+        ds_response = es_client.indices.get_data_stream(name=f"{prefix}-*")
+        for ds in ds_response.get("data_streams", []):
+            try:
+                es_client.indices.delete_data_stream(name=ds["name"])
+                logger.info("Deleted data stream: %s", ds["name"])
+            except Exception as exc:
+                logger.warning("Failed to delete data stream '%s': %s", ds["name"], exc)
+    except Exception:
+        pass
+
+    # 5. Status and audit indices (created by setup)
     for idx in [STATUS_INDEX, "deepfreeze-audit"]:
         try:
             if es_client.indices.exists(index=idx):
