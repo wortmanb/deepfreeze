@@ -14,14 +14,14 @@ def runner():
 
 
 class TestRefreezeCLI:
-    """Refreeze command via CliRunner."""
+    """Refreeze command via CliRunner — uses --porcelain for output."""
 
     def test_refreeze_dry_run(self, runner, test_config_file):
         """Refreeze --dry-run should exit 0 without changing state."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
-            "refreeze",
+            "refreeze", "--porcelain",
         ])
         assert result.exit_code == 0, f"Refreeze dry-run failed:\n{result.output}\n{result.exception}"
 
@@ -30,6 +30,6 @@ class TestRefreezeCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "refreeze",
+            "refreeze", "--porcelain",
         ])
         assert result.exit_code == 0, f"Refreeze failed:\n{result.output}\n{result.exception}"

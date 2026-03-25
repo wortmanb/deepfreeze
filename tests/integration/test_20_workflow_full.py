@@ -5,12 +5,14 @@ Exercises the complete deepfreeze lifecycle in order:
 
 On an already-initialized cluster, setup is skipped (it would fail
 precondition checks).  All operations use the live cluster settings.
+All CLI invocations use --porcelain for machine-readable output.
 
 This is the "golden path" integration test.  It is long-running
 (marked slow) because thaw operations may take minutes depending on
 the storage provider.
 """
 
+import json
 import logging
 
 import pytest
@@ -34,11 +36,12 @@ def runner():
 
 
 def _invoke(runner, config, *args):
-    """Invoke the CLI and assert success."""
+    """Invoke the CLI with --porcelain and assert success."""
     result = runner.invoke(cli, [
         "--config", config,
         "--local",
         *args,
+        "--porcelain",
     ])
     assert result.exit_code == 0, (
         f"CLI failed (exit={result.exit_code}):\n{result.output}\n{result.exception}"
@@ -61,9 +64,12 @@ class TestFullLifecycle:
         logger.info("Live settings: provider=%s, prefix=%s", settings.get("provider"), settings.get("repo_name_prefix"))
 
     def test_02_status(self, runner, test_config_file):
-        """Status should succeed."""
+        """Status should succeed and return valid JSON."""
         result = _invoke(runner, test_config_file, "status")
-        logger.info("Status output length: %d chars", len(result.output))
+        data = json.loads(result.output)
+        assert "settings" in data
+        logger.info("Status: %d repos, %d thaw requests",
+                     len(data.get("repositories", [])), len(data.get("thaw_requests", [])))
 
     def test_03_rotate(self, runner, test_config_file, es_client, live_repo_prefix):
         """Rotate should create a new repository."""
@@ -89,23 +95,36 @@ class TestFullLifecycle:
 
     def test_05_thaw_create(self, runner, test_config_file):
         """Create a thaw request for a broad date range."""
-        result = _invoke(
-            runner, test_config_file,
+        result = runner.invoke(cli, [
+            "--config", test_config_file,
+            "--local",
             "thaw",
             "--start-date", "2020-01-01T00:00:00Z",
             "--end-date", "2030-12-31T23:59:59Z",
             "--async",
-        )
+            "--porcelain",
+        ])
+        assert result.exit_code == 0, f"Thaw create failed:\n{result.output}\n{result.exception}"
         logger.info("Thaw create output: %s", result.output[:200])
 
     def test_06_thaw_check(self, runner, test_config_file):
         """Check thaw request status."""
-        result = _invoke(runner, test_config_file, "thaw", "--check-status")
+        result = runner.invoke(cli, [
+            "--config", test_config_file,
+            "--local",
+            "thaw", "--check-status", "--porcelain",
+        ])
+        assert result.exit_code == 0, f"Thaw check failed:\n{result.output}"
         logger.info("Thaw check output: %s", result.output[:200])
 
     def test_07_thaw_list(self, runner, test_config_file):
         """List thaw requests."""
-        result = _invoke(runner, test_config_file, "thaw", "--list")
+        result = runner.invoke(cli, [
+            "--config", test_config_file,
+            "--local",
+            "thaw", "--list", "--porcelain",
+        ])
+        assert result.exit_code == 0, f"Thaw list failed:\n{result.output}"
         logger.info("Thaw list output: %s", result.output[:200])
 
     def test_08_refreeze(self, runner, test_config_file):
@@ -124,6 +143,8 @@ class TestFullLifecycle:
         logger.info("Repair complete")
 
     def test_11_final_status(self, runner, test_config_file):
-        """Final status should succeed."""
+        """Final status should succeed and return valid JSON."""
         result = _invoke(runner, test_config_file, "status")
-        logger.info("Final status:\n%s", result.output[:500])
+        data = json.loads(result.output)
+        logger.info("Final: %d repos, %d thaw requests",
+                     len(data.get("repositories", [])), len(data.get("thaw_requests", [])))

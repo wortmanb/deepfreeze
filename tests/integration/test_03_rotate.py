@@ -21,7 +21,7 @@ def runner():
 
 
 class TestRotateCLI:
-    """Rotate command via CliRunner."""
+    """Rotate command via CliRunner — uses --porcelain for output."""
 
     def test_rotate_dry_run(self, runner, test_config_file, es_client, live_repo_prefix, cluster_initialized):
         """--dry-run should not create a new repository."""
@@ -33,7 +33,7 @@ class TestRotateCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
-            "rotate",
+            "rotate", "--porcelain",
         ])
         assert result.exit_code == 0, f"Rotate dry-run failed:\n{result.output}\n{result.exception}"
 
@@ -51,7 +51,7 @@ class TestRotateCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "rotate",
+            "rotate", "--porcelain",
         ])
         assert result.exit_code == 0, f"Rotate failed:\n{result.output}\n{result.exception}"
 
