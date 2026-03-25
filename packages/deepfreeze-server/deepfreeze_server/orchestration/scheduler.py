@@ -1,4 +1,13 @@
-"""APScheduler integration for recurring deepfreeze jobs."""
+"""APScheduler integration for recurring deepfreeze jobs.
+
+Jobs come from three sources (in load order):
+1. Built-in defaults (e.g., check-thaw-status)
+2. Config YAML (`server.scheduled_jobs`)
+3. Elasticsearch (`deepfreeze-status` index, doctype: "scheduled_job")
+
+Only source 3 is mutable via the API. Sources 1 and 2 are recreated on
+every startup and are never persisted to ES.
+"""
 
 from __future__ import annotations
 
@@ -9,14 +18,22 @@ from typing import TYPE_CHECKING, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from elasticsearch8 import NotFoundError
+
+from deepfreeze_core.constants import STATUS_INDEX
 
 from ..config import ScheduledJobConfig
 from ..models.events import Event, EventChannel, EventType
 
 if TYPE_CHECKING:
+    from elasticsearch8 import Elasticsearch
+
     from .orchestrator import DeepfreezeOrchestrator
 
 logger = logging.getLogger("deepfreeze.server.scheduler")
+
+SCHEDULED_JOB_DOCTYPE = "scheduled_job"
+SCHEDULED_JOB_ID_PREFIX = "scheduled_job:"
 
 # Built-in default: check thaw status every 60s
 DEFAULT_JOBS = [
@@ -36,15 +53,22 @@ class DeepfreezeScheduler:
     side effect from the old DeepfreezeService).
 
     User-configurable jobs are loaded from the server config YAML.
+    Jobs added via the API are persisted to Elasticsearch and survive restarts.
     """
 
     def __init__(self, orchestrator: DeepfreezeOrchestrator) -> None:
         self._orch = orchestrator
         self._scheduler = AsyncIOScheduler()
         self._job_configs: dict[str, ScheduledJobConfig] = {}
+        # Track which jobs are persisted in ES (API-added) vs ephemeral (built-in/config)
+        self._persisted_jobs: set[str] = set()
+
+    @property
+    def _client(self) -> Elasticsearch:
+        return self._orch._client
 
     async def start(self, extra_jobs: list[ScheduledJobConfig] | None = None) -> None:
-        """Register default + config-driven jobs and start the scheduler."""
+        """Register default + config-driven + ES-persisted jobs and start the scheduler."""
         all_jobs = list(DEFAULT_JOBS)
         if extra_jobs:
             all_jobs.extend(extra_jobs)
@@ -52,10 +76,20 @@ class DeepfreezeScheduler:
         for job_cfg in all_jobs:
             self._add_job(job_cfg)
 
+        # Load persisted jobs from Elasticsearch
+        persisted = self._load_persisted_jobs()
+        for job_cfg, paused in persisted:
+            if job_cfg.name not in self._job_configs:
+                self._add_job(job_cfg)
+                self._persisted_jobs.add(job_cfg.name)
+                if paused:
+                    self._scheduler.pause_job(job_cfg.name)
+
         self._scheduler.start()
         logger.info(
-            "Scheduler started with %d job(s): %s",
+            "Scheduler started with %d job(s) (%d from ES): %s",
             len(self._job_configs),
+            len(self._persisted_jobs),
             ", ".join(self._job_configs.keys()),
         )
 
@@ -82,14 +116,17 @@ class DeepfreezeScheduler:
                 "interval_seconds": cfg.interval_seconds,
                 "paused": ap_job is not None and ap_job.next_run_time is None,
                 "next_run": next_run,
+                "persisted": name in self._persisted_jobs,
             })
         return result
 
     def add_job(self, cfg: ScheduledJobConfig) -> dict[str, Any]:
-        """Add a new scheduled job at runtime."""
+        """Add a new scheduled job at runtime. Persists to ES."""
         if cfg.name in self._job_configs:
             raise ValueError(f"Job '{cfg.name}' already exists")
         self._add_job(cfg)
+        self._persist_job(cfg, paused=False)
+        self._persisted_jobs.add(cfg.name)
         return {"name": cfg.name, "status": "added"}
 
     def remove_job(self, name: str) -> bool:
@@ -98,6 +135,9 @@ class DeepfreezeScheduler:
             return False
         self._scheduler.remove_job(name)
         del self._job_configs[name]
+        if name in self._persisted_jobs:
+            self._delete_persisted_job(name)
+            self._persisted_jobs.discard(name)
         logger.info("Removed scheduled job: %s", name)
         return True
 
@@ -106,6 +146,8 @@ class DeepfreezeScheduler:
         if name not in self._job_configs:
             return False
         self._scheduler.pause_job(name)
+        if name in self._persisted_jobs:
+            self._update_persisted_job(name, paused=True)
         logger.info("Paused scheduled job: %s", name)
         return True
 
@@ -114,8 +156,93 @@ class DeepfreezeScheduler:
         if name not in self._job_configs:
             return False
         self._scheduler.resume_job(name)
+        if name in self._persisted_jobs:
+            self._update_persisted_job(name, paused=False)
         logger.info("Resumed scheduled job: %s", name)
         return True
+
+    # -- ES persistence --
+
+    def _es_doc_id(self, name: str) -> str:
+        """Deterministic ES document ID for a scheduled job."""
+        return f"{SCHEDULED_JOB_ID_PREFIX}{name}"
+
+    def _load_persisted_jobs(self) -> list[tuple[ScheduledJobConfig, bool]]:
+        """Load scheduled jobs from Elasticsearch. Returns (config, paused) tuples."""
+        try:
+            response = self._client.search(
+                index=STATUS_INDEX,
+                query={"term": {"doctype": SCHEDULED_JOB_DOCTYPE}},
+                size=100,
+            )
+        except Exception as e:
+            logger.warning("Failed to load persisted scheduled jobs: %s", e)
+            return []
+
+        jobs = []
+        for hit in response["hits"]["hits"]:
+            src = hit["_source"]
+            try:
+                cfg = ScheduledJobConfig(
+                    name=src["name"],
+                    action=src["action"],
+                    params=src.get("params", {}),
+                    cron=src.get("cron"),
+                    interval_seconds=src.get("interval_seconds"),
+                )
+                paused = src.get("paused", False)
+                jobs.append((cfg, paused))
+            except Exception as e:
+                logger.warning("Skipping malformed persisted job %s: %s", hit["_id"], e)
+
+        logger.info("Loaded %d scheduled job(s) from Elasticsearch", len(jobs))
+        return jobs
+
+    def _persist_job(self, cfg: ScheduledJobConfig, paused: bool = False) -> None:
+        """Save a scheduled job to Elasticsearch."""
+        doc = {
+            "doctype": SCHEDULED_JOB_DOCTYPE,
+            "name": cfg.name,
+            "action": cfg.action,
+            "params": cfg.params,
+            "cron": cfg.cron,
+            "interval_seconds": cfg.interval_seconds,
+            "paused": paused,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            self._client.index(
+                index=STATUS_INDEX,
+                id=self._es_doc_id(cfg.name),
+                document=doc,
+            )
+            logger.info("Persisted scheduled job to ES: %s", cfg.name)
+        except Exception as e:
+            logger.error("Failed to persist scheduled job '%s': %s", cfg.name, e)
+
+    def _update_persisted_job(self, name: str, **fields: Any) -> None:
+        """Update fields on a persisted scheduled job."""
+        try:
+            self._client.update(
+                index=STATUS_INDEX,
+                id=self._es_doc_id(name),
+                doc=fields,
+            )
+        except Exception as e:
+            logger.error("Failed to update persisted job '%s': %s", name, e)
+
+    def _delete_persisted_job(self, name: str) -> None:
+        """Remove a scheduled job from Elasticsearch."""
+        try:
+            self._client.delete(
+                index=STATUS_INDEX,
+                id=self._es_doc_id(name),
+            )
+            logger.info("Deleted persisted scheduled job from ES: %s", name)
+        except NotFoundError:
+            pass  # already gone
+        except Exception as e:
+            logger.error("Failed to delete persisted job '%s': %s", name, e)
 
     # -- Internal --
 
