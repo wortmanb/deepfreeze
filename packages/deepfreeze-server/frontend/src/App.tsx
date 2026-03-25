@@ -14,9 +14,19 @@ import {
   EuiFlyoutHeader,
   EuiFlyoutBody,
   EuiDescriptionList,
+  EuiFieldText,
+  EuiFieldPassword,
+  EuiButton,
+  EuiForm,
+  EuiFormRow,
+  EuiPanel,
+  EuiCallOut,
+  EuiFlexGroup,
+  EuiFlexItem,
+  EuiText,
 } from '@elastic/eui';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
-import { api } from './api/client';
+import { api, login, logout, checkSession, onAuthError, getAuthToken } from './api/client';
 import Overview from './pages/Overview';
 import Repositories from './pages/Repositories';
 import ThawRequests from './pages/ThawRequests';
@@ -41,7 +51,107 @@ function useColorMode(): [ColorMode, () => void] {
   return [colorMode, toggle];
 }
 
-function AppShell({ colorMode, onToggleColorMode }: { colorMode: ColorMode; onToggleColorMode: () => void }) {
+function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
+  colorMode: ColorMode;
+  onToggleColorMode: () => void;
+  onLogin: (username: string) => void;
+}) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const result = await login(username, password);
+      onLogin(result.username);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
+      <div style={{ position: 'absolute', top: 16, right: 16 }}>
+        <EuiButtonIcon
+          iconType={colorMode === 'dark' ? 'sun' : 'moon'}
+          aria-label="Toggle light/dark mode"
+          color="text"
+          display="empty"
+          size="s"
+          onClick={onToggleColorMode}
+        />
+      </div>
+      <EuiPanel paddingSize="xl" style={{ width: 400, maxWidth: '90vw' }}>
+        <EuiFlexGroup alignItems="center" gutterSize="m" responsive={false}>
+          <EuiFlexItem grow={false}>
+            <EuiIcon type="snowflake" size="xl" color="primary" />
+          </EuiFlexItem>
+          <EuiFlexItem>
+            <EuiTitle size="m">
+              <h1>deepfreeze</h1>
+            </EuiTitle>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+
+        <EuiSpacer size="s" />
+        <EuiText size="s" color="subdued">
+          <p>Sign in with your Elasticsearch credentials</p>
+        </EuiText>
+
+        <EuiSpacer size="l" />
+
+        {error && (
+          <>
+            <EuiCallOut title={error} color="danger" iconType="alert" size="s" />
+            <EuiSpacer size="m" />
+          </>
+        )}
+
+        <form onSubmit={handleSubmit}>
+          <EuiForm>
+            <EuiFormRow label="Username">
+              <EuiFieldText
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoFocus
+              />
+            </EuiFormRow>
+            <EuiFormRow label="Password">
+              <EuiFieldPassword
+                type="dual"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </EuiFormRow>
+            <EuiSpacer size="m" />
+            <EuiButton
+              type="submit"
+              fill
+              fullWidth
+              isLoading={loading}
+              isDisabled={!username || !password}
+            >
+              Sign in
+            </EuiButton>
+          </EuiForm>
+        </form>
+      </EuiPanel>
+    </div>
+  );
+}
+
+function AppShell({ colorMode, onToggleColorMode, username, onLogout }: {
+  colorMode: ColorMode;
+  onToggleColorMode: () => void;
+  username: string;
+  onLogout: () => void;
+}) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isSideNavOpenOnMobile, setIsSideNavOpenOnMobile] = useState(false);
@@ -148,6 +258,11 @@ function AppShell({ colorMode, onToggleColorMode }: { colorMode: ColorMode; onTo
         </EuiHeaderSection>
         <EuiHeaderSection side="right">
           <EuiHeaderSectionItem>
+            <EuiText size="xs" color="subdued" style={{ marginRight: 4 }}>
+              {username}
+            </EuiText>
+          </EuiHeaderSectionItem>
+          <EuiHeaderSectionItem>
             <EuiButtonIcon
               iconType={colorMode === 'dark' ? 'sun' : 'moon'}
               aria-label="Toggle light/dark mode"
@@ -168,6 +283,16 @@ function AppShell({ colorMode, onToggleColorMode }: { colorMode: ColorMode; onTo
                 fetchConfig();
                 setConfigOpen(true);
               }}
+            />
+          </EuiHeaderSectionItem>
+          <EuiHeaderSectionItem>
+            <EuiButtonIcon
+              iconType="exit"
+              aria-label="Sign out"
+              color="text"
+              display="empty"
+              size="s"
+              onClick={onLogout}
             />
           </EuiHeaderSectionItem>
         </EuiHeaderSection>
@@ -224,11 +349,51 @@ function AppShell({ colorMode, onToggleColorMode }: { colorMode: ColorMode; onTo
 
 export default function App() {
   const [colorMode, toggleColorMode] = useColorMode();
+  const [username, setUsername] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Check for existing session on mount
+  useEffect(() => {
+    if (getAuthToken()) {
+      checkSession().then((info) => {
+        if (info) setUsername(info.username);
+        setAuthChecked(true);
+      });
+    } else {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  // Listen for 401 errors to force re-login
+  useEffect(() => {
+    onAuthError(() => setUsername(null));
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    await logout();
+    setUsername(null);
+  }, []);
+
+  if (!authChecked) return null; // brief loading state
+
   return (
     <EuiProvider colorMode={colorMode}>
-      <BrowserRouter>
-        <AppShell colorMode={colorMode} onToggleColorMode={toggleColorMode} />
-      </BrowserRouter>
+      {username ? (
+        <BrowserRouter>
+          <AppShell
+            colorMode={colorMode}
+            onToggleColorMode={toggleColorMode}
+            username={username}
+            onLogout={handleLogout}
+          />
+        </BrowserRouter>
+      ) : (
+        <LoginPage
+          colorMode={colorMode}
+          onToggleColorMode={toggleColorMode}
+          onLogin={setUsername}
+        />
+      )}
     </EuiProvider>
   );
 }

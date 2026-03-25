@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from deepfreeze_core.esclient import create_es_client
 
-from .api import actions, events, health, jobs, scheduler, status
+from .api import actions, events, health, jobs, login, scheduler, status
 from .api.auth import AuthMiddleware
 from .config import ServerConfig, get_elasticsearch_config, load_server_config
 from .orchestration.orchestrator import DeepfreezeOrchestrator
@@ -108,6 +108,7 @@ def create_app(
 
     # API routes
     app.include_router(health.router, tags=["health"])
+    app.include_router(login.router, prefix="/api", tags=["auth"])
     app.include_router(status.router, prefix="/api", tags=["status"])
     app.include_router(actions.router, prefix="/api", tags=["actions"])
     app.include_router(jobs.router, prefix="/api", tags=["jobs"])

@@ -19,7 +19,7 @@ from ..config import AuthConfig
 logger = logging.getLogger("deepfreeze.server.auth")
 
 # Paths that never require auth
-_PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc"}
+_PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc", "/api/auth/login"}
 
 # Role → allowed path patterns
 # More specific checks: admin gets everything, operator gets actions + read,
@@ -94,7 +94,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         token_value = auth_header[7:]  # strip "Bearer "
 
-        # Look up token
+        # Check ES session tokens first
+        from .login import get_session
+
+        session = get_session(token_value)
+        if session:
+            # ES-authenticated session — grant full access (admin equivalent)
+            request.state.auth_name = session["username"]
+            request.state.auth_roles = ["admin"]
+            return await call_next(request)
+
+        # Look up configured API token
         matched = None
         for t in auth_config.tokens:
             if t.token == token_value:
