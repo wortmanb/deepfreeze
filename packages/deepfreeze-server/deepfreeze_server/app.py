@@ -36,7 +36,7 @@ _STORAGE_ENV_MAP = {
         "account_key": "AZURE_STORAGE_KEY",
     },
     "gcp": {
-        "project": "GCLOUD_PROJECT",
+        "project": "GOOGLE_CLOUD_PROJECT",
         "credentials_file": "GOOGLE_APPLICATION_CREDENTIALS",
     },
 }
