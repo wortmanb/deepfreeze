@@ -195,49 +195,68 @@ class TestFullLifecycle:
 
     def test_03_load_data(self, es_client, test_prefixes):
         """Load test documents into the data stream."""
-        data_stream = f"{test_prefixes.repo_name_prefix}-data-000001"
-        # Create the data stream by indexing into the matching pattern
+        # Index into the data stream name (not a specific backing index)
+        data_stream = f"{test_prefixes.repo_name_prefix}-data-test"
         success = _load_test_data(es_client, data_stream, NUM_TEST_DOCS)
         assert success >= NUM_TEST_DOCS * 0.9, f"Only {success}/{NUM_TEST_DOCS} docs indexed"
-        logger.info("Test data loaded: %d docs", success)
+
+        # Verify the data stream was created
+        ds = es_client.indices.get_data_stream(name=data_stream)
+        assert len(ds.get("data_streams", [])) == 1, f"Data stream not created: {ds}"
+        logger.info("Test data loaded: %d docs into data stream '%s'", success, data_stream)
 
     def test_04_wait_for_rollover(self, es_client, test_prefixes):
         """Wait for ILM to rollover the hot index (should happen after ~3 minutes)."""
-        pattern = f"{test_prefixes.repo_name_prefix}-data-*"
+        # Data stream backing indices are named .ds-{name}-YYYY.MM.DD-NNNNNN
+        pattern = f".ds-{test_prefixes.repo_name_prefix}-data-*"
 
         def _rolled_over():
             indices = _get_ilm_explain(es_client, pattern)
-            # After rollover, there should be more than one index, or
-            # the original index should no longer be in the hot phase
-            return len(indices) > 1 or any(
-                info.get("phase") != "hot" for info in indices.values()
+            # After rollover, there should be more than one backing index
+            if len(indices) > 1:
+                return True
+            # Or the first index should no longer be in hot
+            return any(info.get("phase") != "hot" for info in indices.values())
+
+        def _diag():
+            indices = _get_ilm_explain(es_client, pattern)
+            return json.dumps(
+                {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
+                 for k, v in indices.items()},
+                indent=2,
             )
 
         logger.info("Waiting for ILM rollover (timeout: 10m)...")
         wait_for(
             _rolled_over,
             timeout=600,
-            initial_interval=15,
-            max_interval=30,
+            initial_interval=10,
+            max_interval=15,
             description="ILM rollover",
+            on_timeout=_diag,
         )
         logger.info("Rollover detected")
 
     def test_05_wait_for_frozen_phase(self, es_client, test_prefixes):
         """Wait for at least one index to reach the frozen ILM phase."""
-        pattern = f"{test_prefixes.repo_name_prefix}-data-*,.ds-{test_prefixes.repo_name_prefix}-data-*"
+        pattern = f".ds-{test_prefixes.repo_name_prefix}-data-*"
+
+        def _diag():
+            indices = _get_ilm_explain(es_client, pattern)
+            return json.dumps(
+                {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
+                 for k, v in indices.items()},
+                indent=2,
+            )
 
         logger.info("Waiting for ILM frozen phase (timeout: 30m)...")
         wait_for(
             lambda: _any_index_in_phase(es_client, pattern, "frozen"),
             timeout=1800,
-            initial_interval=30,
-            max_interval=60,
+            initial_interval=15,
+            max_interval=30,
             description="ILM frozen phase",
-            on_timeout=lambda: json.dumps(
-                {k: v.get("phase") for k, v in _get_ilm_explain(es_client, pattern).items()},
-                indent=2,
-            ),
+            on_timeout=_diag,
         )
         logger.info("At least one index reached frozen phase")
 
@@ -291,8 +310,8 @@ class TestFullLifecycle:
 
     def test_11_verify_queryable(self, es_client, test_prefixes):
         """Verify that thawed indices are searchable."""
-        # Search for any docs in indices matching our test prefix
-        pattern = f"{test_prefixes.repo_name_prefix}-data-*,.ds-{test_prefixes.repo_name_prefix}-data-*"
+        # Search the data stream (covers all backing indices)
+        pattern = f"{test_prefixes.repo_name_prefix}-data-test"
         try:
             result = es_client.search(
                 index=pattern,
