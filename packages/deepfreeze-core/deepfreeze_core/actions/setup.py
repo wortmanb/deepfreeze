@@ -366,8 +366,14 @@ class Setup:
                     )
                 )
 
-            summary = f"Found {len(errors)} precondition error{'s' if len(errors) > 1 else ''} that must be resolved before setup can proceed."
-            raise PreconditionError(summary)
+            # Build plain-text issue list for programmatic consumers
+            def _strip_markup(text: str) -> str:
+                import re
+                return re.sub(r"\[/?[a-z_ ]+\]", "", text).replace("\n", " ").strip()
+
+            issue_texts = [_strip_markup(e["issue"]) for e in errors]
+            summary = f"Found {len(errors)} precondition error{'s' if len(errors) > 1 else ''}: {'; '.join(issue_texts)}"
+            raise PreconditionError(summary, issues=issue_texts)
 
     def do_dry_run(self) -> None:
         """
