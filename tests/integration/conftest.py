@@ -41,6 +41,7 @@ class TestPrefixes:
     bucket_name_prefix: str
     ilm_policy_name: str
     index_template_name: str
+    data_stream_name: str
 
 
 # ---------------------------------------------------------------------------
@@ -55,12 +56,7 @@ def test_run_id():
 
 @pytest.fixture(scope="session")
 def integration_config():
-    """Load ES config from env var or default location.
-
-    Priority:
-    1. DEEPFREEZE_TEST_CONFIG env var -> path to YAML file
-    2. ~/.deepfreeze/config.yml
-    """
+    """Load ES config from env var or default location."""
     config_path = os.environ.get("DEEPFREEZE_TEST_CONFIG")
     if not config_path:
         default = Path.home() / ".deepfreeze" / "config.yml"
@@ -110,13 +106,7 @@ def es_client(integration_config):
 
 @pytest.fixture(scope="session")
 def storage_provider(integration_config):
-    """The cloud storage provider.
-
-    Priority:
-    1. DEEPFREEZE_TEST_PROVIDER env var
-    2. First provider in config with importable SDK
-    3. 'aws' as fallback
-    """
+    """The cloud storage provider."""
     env_provider = os.environ.get("DEEPFREEZE_TEST_PROVIDER")
     if env_provider:
         return env_provider
@@ -143,15 +133,13 @@ def test_prefixes(test_run_id):
         bucket_name_prefix=prefix,
         ilm_policy_name=f"{prefix}-ilm",
         index_template_name=f"{prefix}-tmpl",
+        data_stream_name=f"{prefix}-data",
     )
 
 
 @pytest.fixture(scope="session")
 def test_config_file(integration_config, test_prefixes):
-    """Temporary config YAML with real ES creds.
-
-    This is the file passed to ``--config`` for all CLI invocations.
-    """
+    """Temporary config YAML with real ES creds."""
     config = dict(integration_config)
     config.setdefault("logging", {})["loglevel"] = "DEBUG"
 
@@ -169,17 +157,18 @@ def test_config_file(integration_config, test_prefixes):
 
 
 # ---------------------------------------------------------------------------
-# Index template fixture — creates a minimal template for setup to reference
+# Index template fixture — creates a data stream template for setup
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def test_index_template(es_client, test_prefixes):
-    """Create a minimal index template for the test run.
+    """Create a data stream index template for the test run.
 
     Setup requires an existing index template to attach the ILM policy to.
+    The template must have data_stream: {} for ILM rollover to work.
     """
     template_name = test_prefixes.index_template_name
-    pattern = f"{test_prefixes.repo_name_prefix}-data-*"
+    pattern = f"{test_prefixes.data_stream_name}*"
 
     es_client.indices.put_index_template(
         name=template_name,
@@ -191,7 +180,7 @@ def test_index_template(es_client, test_prefixes):
             },
         },
     )
-    logger.info("Created test index template '%s' (pattern: %s)", template_name, pattern)
+    logger.info("Created data stream template '%s' (pattern: %s)", template_name, pattern)
     yield template_name
 
 
@@ -247,26 +236,49 @@ def http_client(server_url):
 
 
 # ---------------------------------------------------------------------------
-# Automatic cleanup
+# Automatic cleanup (modeled after deepfreeze-testing/reset.sh)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session", autouse=True)
 def auto_cleanup(es_client, test_prefixes, storage_provider):
     """Yield, then clean up ALL test artifacts on session teardown.
 
-    Removes everything created by this test run:
-    - The deepfreeze-status and deepfreeze-audit indices
-    - Snapshot repositories matching dftest-*
-    - ILM policies matching dftest-*
-    - Index templates matching dftest-*
-    - S3 buckets matching dftest-*
+    Cleanup order follows reset.sh:
+    1. Stop ILM
+    2. Delete data streams
+    3. Delete snapshot repositories
+    4. Delete S3/Azure/GCS buckets
+    5. Delete ILM policies
+    6. Delete index templates
+    7. Delete status and audit indices
+    8. Delete any remaining indices matching prefix
+    9. Restart ILM
     """
     yield
 
     prefix = test_prefixes.repo_name_prefix
-    logger.info("Cleaning up test artifacts with prefix '%s'", prefix)
+    logger.info("=== Cleanup starting (prefix: %s) ===", prefix)
 
-    # 1. Snapshot repositories
+    # 1. Stop ILM
+    try:
+        es_client.ilm.stop()
+        logger.info("ILM stopped")
+    except Exception as exc:
+        logger.warning("Failed to stop ILM: %s", exc)
+
+    # 2. Delete data streams matching prefix
+    try:
+        ds_response = es_client.indices.get_data_stream(name=f"{prefix}*")
+        for ds in ds_response.get("data_streams", []):
+            try:
+                es_client.indices.delete_data_stream(name=ds["name"])
+                logger.info("Deleted data stream: %s", ds["name"])
+            except Exception as exc:
+                logger.warning("Failed to delete data stream '%s': %s", ds["name"], exc)
+    except Exception:
+        pass
+
+    # 3. Delete snapshot repositories
     try:
         repos = es_client.snapshot.get_repository(name=f"{prefix}*")
         for repo_name in repos:
@@ -278,55 +290,7 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
     except Exception:
         pass
 
-    # 2. ILM policies
-    try:
-        all_policies = es_client.ilm.get_lifecycle()
-        for name in all_policies:
-            if name.startswith(prefix):
-                try:
-                    es_client.ilm.delete_lifecycle(name=name)
-                    logger.info("Deleted ILM policy: %s", name)
-                except Exception as exc:
-                    logger.warning("Failed to delete ILM policy '%s': %s", name, exc)
-    except Exception:
-        pass
-
-    # 3. Index templates
-    try:
-        es_client.indices.delete_index_template(name=test_prefixes.index_template_name)
-        logger.info("Deleted index template: %s", test_prefixes.index_template_name)
-    except Exception:
-        pass
-
-    # 4. Data streams matching prefix
-    try:
-        ds_response = es_client.indices.get_data_stream(name=f"{prefix}-*")
-        for ds in ds_response.get("data_streams", []):
-            try:
-                es_client.indices.delete_data_stream(name=ds["name"])
-                logger.info("Deleted data stream: %s", ds["name"])
-            except Exception as exc:
-                logger.warning("Failed to delete data stream '%s': %s", ds["name"], exc)
-    except Exception:
-        pass
-
-    # 5. Status and audit indices (created by setup)
-    for idx in [STATUS_INDEX, "deepfreeze-audit"]:
-        try:
-            if es_client.indices.exists(index=idx):
-                es_client.indices.delete(index=idx)
-                logger.info("Deleted index: %s", idx)
-        except Exception as exc:
-            logger.warning("Failed to delete index '%s': %s", idx, exc)
-
-    # 5. Any other indices matching prefix
-    try:
-        es_client.indices.delete(index=f"{prefix}*", ignore_unavailable=True)
-        logger.info("Deleted indices matching '%s*'", prefix)
-    except Exception:
-        pass
-
-    # 6. S3 buckets (best-effort)
+    # 4. Delete cloud storage buckets
     try:
         from deepfreeze_core.s3client import s3_client_factory
 
@@ -339,7 +303,60 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
             except Exception as exc:
                 logger.warning("Failed to delete bucket '%s': %s", bucket_name, exc)
     except Exception as exc:
-        logger.warning("Failed to clean S3 buckets: %s", exc)
+        logger.warning("Failed to clean storage buckets: %s", exc)
+
+    # 5. Delete ILM policies
+    try:
+        all_policies = es_client.ilm.get_lifecycle()
+        for name in all_policies:
+            if name.startswith(prefix):
+                try:
+                    es_client.ilm.delete_lifecycle(name=name)
+                    logger.info("Deleted ILM policy: %s", name)
+                except Exception as exc:
+                    logger.warning("Failed to delete ILM policy '%s': %s", name, exc)
+    except Exception:
+        pass
+
+    # 6. Delete index templates
+    try:
+        es_client.indices.delete_index_template(name=test_prefixes.index_template_name)
+        logger.info("Deleted index template: %s", test_prefixes.index_template_name)
+    except Exception:
+        pass
+
+    # 7. Delete status and audit indices
+    for idx in [STATUS_INDEX, "deepfreeze-audit"]:
+        try:
+            if es_client.indices.exists(index=idx):
+                es_client.indices.delete(index=idx)
+                logger.info("Deleted index: %s", idx)
+        except Exception as exc:
+            logger.warning("Failed to delete index '%s': %s", idx, exc)
+
+    # 8. Delete any remaining indices matching prefix
+    try:
+        es_client.indices.delete(index=f"{prefix}*", ignore_unavailable=True)
+        logger.info("Deleted indices matching '%s*'", prefix)
+    except Exception:
+        pass
+
+    # 9. Restart ILM
+    try:
+        es_client.ilm.start()
+        logger.info("ILM restarted")
+    except Exception as exc:
+        logger.warning("Failed to restart ILM: %s", exc)
+
+    # 10. Restore ILM poll interval to default (in case test didn't finish)
+    try:
+        es_client.cluster.put_settings(
+            body={"transient": {"indices.lifecycle.poll_interval": None}}
+        )
+    except Exception:
+        pass
+
+    logger.info("=== Cleanup complete ===")
 
 
 # ---------------------------------------------------------------------------
