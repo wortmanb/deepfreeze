@@ -22,7 +22,9 @@ dependencies = [
     "packages/deepfreeze-cli",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pytest-timeout>=2.2.0",
     "moto[s3]>=4.0.0",
+    "httpx>=0.24.0",
 ]
 
 [tool.hatch.envs.test.scripts]
@@ -30,6 +32,17 @@ all = "pytest tests/ -v"
 core = "pytest tests/core/ -v"
 cli = "pytest tests/cli/ -v"
 cov = "pytest tests/ --cov=deepfreeze_core --cov=deepfreeze --cov-report=term-missing"
+integration = "pytest tests/integration/ -v -m integration"
+integration-fast = "pytest tests/integration/ -v -m 'integration and not slow and not webui'"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: Tests requiring a real Elasticsearch cluster",
+    "slow: Tests that may take minutes (thaw/restore operations)",
+    "cli: CLI invocation tests",
+    "api: Server API tests",
+    "webui: Playwright browser tests",
+]
 
 [tool.black]
 line-length = 88
