@@ -14,6 +14,7 @@ from deepfreeze_core import (
     ActionError,
     AuditLogger,
     DeepfreezeException,
+    PreconditionError,
     create_es_client,
 )
 
@@ -413,6 +414,9 @@ def setup(
             action.do_dry_run()
         else:
             action.do_action()
+    except PreconditionError:
+        # Detailed error panels were already printed by _check_preconditions()
+        ctx.exit(1)
     except DeepfreezeException as e:
         if not porcelain:
             click.echo(f"Error: {e}", err=True)
