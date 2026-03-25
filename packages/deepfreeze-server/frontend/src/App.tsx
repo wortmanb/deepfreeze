@@ -56,17 +56,26 @@ function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
   onToggleColorMode: () => void;
   onLogin: (username: string) => void;
 }) {
+  const [authMode, setAuthMode] = useState<'password' | 'apikey'>('password');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const canSubmit = authMode === 'password'
+    ? username && password
+    : apiKey;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const result = await login(username, password);
+      const credentials = authMode === 'password'
+        ? { username, password }
+        : { api_key: apiKey };
+      const result = await login(credentials);
       onLogin(result.username);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -106,6 +115,33 @@ function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
 
         <EuiSpacer size="l" />
 
+        <EuiFlexGroup gutterSize="s">
+          <EuiFlexItem>
+            <EuiButton
+              size="s"
+              color={authMode === 'password' ? 'primary' : 'text'}
+              fill={authMode === 'password'}
+              onClick={() => setAuthMode('password')}
+              fullWidth
+            >
+              Username / Password
+            </EuiButton>
+          </EuiFlexItem>
+          <EuiFlexItem>
+            <EuiButton
+              size="s"
+              color={authMode === 'apikey' ? 'primary' : 'text'}
+              fill={authMode === 'apikey'}
+              onClick={() => setAuthMode('apikey')}
+              fullWidth
+            >
+              API Key
+            </EuiButton>
+          </EuiFlexItem>
+        </EuiFlexGroup>
+
+        <EuiSpacer size="l" />
+
         {error && (
           <>
             <EuiCallOut title={error} color="danger" iconType="alert" size="s" />
@@ -115,27 +151,43 @@ function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
 
         <form onSubmit={handleSubmit}>
           <EuiForm>
-            <EuiFormRow label="Username">
-              <EuiFieldText
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoFocus
-              />
-            </EuiFormRow>
-            <EuiFormRow label="Password">
-              <EuiFieldPassword
-                type="dual"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </EuiFormRow>
+            {authMode === 'password' ? (
+              <>
+                <EuiFormRow label="Username">
+                  <EuiFieldText
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    autoFocus
+                  />
+                </EuiFormRow>
+                <EuiFormRow label="Password">
+                  <EuiFieldPassword
+                    type="dual"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </EuiFormRow>
+              </>
+            ) : (
+              <EuiFormRow
+                label="API Key"
+                helpText="Encoded API key or id:key format — create one in Kibana under Stack Management > API Keys"
+              >
+                <EuiFieldPassword
+                  type="dual"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  autoFocus
+                />
+              </EuiFormRow>
+            )}
             <EuiSpacer size="m" />
             <EuiButton
               type="submit"
               fill
               fullWidth
               isLoading={loading}
-              isDisabled={!username || !password}
+              isDisabled={!canSubmit}
             >
               Sign in
             </EuiButton>

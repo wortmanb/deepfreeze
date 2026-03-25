@@ -25,8 +25,9 @@ SESSION_TTL = 8 * 60 * 60  # 8 hours
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str | None = None
+    password: str | None = None
+    api_key: str | None = None  # ES API key (id:key or encoded)
 
 
 class LoginResponse(BaseModel):
@@ -59,35 +60,53 @@ def remove_session(token: str) -> None:
     _sessions.pop(token, None)
 
 
+def _build_es_kwargs(raw_config: dict) -> dict:
+    """Extract connection kwargs (hosts, TLS) from server config."""
+    es_section = raw_config.get("elasticsearch", {})
+    kwargs: dict = {}
+    if "hosts" in es_section:
+        kwargs["hosts"] = es_section["hosts"]
+    if "cloud_id" in es_section:
+        kwargs["cloud_id"] = es_section["cloud_id"]
+    if "ca_certs" in es_section:
+        kwargs["ca_certs"] = es_section["ca_certs"]
+    if "verify_certs" in es_section:
+        kwargs["verify_certs"] = es_section["verify_certs"]
+    return kwargs
+
+
 @router.post("/auth/login", response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request):
-    """Authenticate against Elasticsearch and return a session token."""
-    # Build ES connection config from the server's raw config, but
-    # substitute the user-supplied credentials.
+    """Authenticate against Elasticsearch and return a session token.
+
+    Accepts either username/password or an ES API key.
+    """
+    from fastapi.responses import JSONResponse
+
     raw_config: dict = request.app.state.raw_config
-    es_section = raw_config.get("elasticsearch", {})
+    es_kwargs = _build_es_kwargs(raw_config)
 
-    es_kwargs: dict = {}
-    if "hosts" in es_section:
-        es_kwargs["hosts"] = es_section["hosts"]
-    if "cloud_id" in es_section:
-        es_kwargs["cloud_id"] = es_section["cloud_id"]
-    if "ca_certs" in es_section:
-        es_kwargs["ca_certs"] = es_section["ca_certs"]
-    if "verify_certs" in es_section:
-        es_kwargs["verify_certs"] = es_section["verify_certs"]
-
-    # Use the provided credentials
-    es_kwargs["basic_auth"] = (body.username, body.password)
+    # Determine auth method
+    identity_label = "unknown"
+    if body.api_key:
+        es_kwargs["api_key"] = body.api_key
+        identity_label = "api_key"
+    elif body.username and body.password:
+        es_kwargs["basic_auth"] = (body.username, body.password)
+        identity_label = body.username
+    else:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Provide username/password or api_key"},
+        )
 
     try:
         client = create_es_client(**es_kwargs)
         info = client.security.authenticate()
-        es_username = info.get("username", body.username)
+        es_username = info.get("username", identity_label)
         client.close()
     except Exception as e:
-        logger.info("Login failed for user '%s': %s", body.username, e)
-        from fastapi.responses import JSONResponse
+        logger.info("Login failed for '%s': %s", identity_label, e)
         return JSONResponse(
             status_code=401,
             content={"detail": "Invalid Elasticsearch credentials"},

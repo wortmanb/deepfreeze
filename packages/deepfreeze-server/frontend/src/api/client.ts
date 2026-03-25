@@ -71,11 +71,13 @@ export interface UserInfo {
   authenticated: boolean;
 }
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
+export async function login(
+  credentials: { username: string; password: string } | { api_key: string },
+): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(credentials),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
