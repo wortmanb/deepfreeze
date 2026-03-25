@@ -104,6 +104,7 @@ export interface ScheduledJob {
   interval_seconds: number | null;
   paused: boolean;
   next_run: string | null;
+  persisted: boolean;
 }
 
 export interface AddScheduledJobRequest {

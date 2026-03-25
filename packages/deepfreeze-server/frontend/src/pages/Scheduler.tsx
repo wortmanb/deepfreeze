@@ -253,6 +253,11 @@ export default function Scheduler() {
           <EuiFlexItem grow={false}>
             <strong>{name}</strong>
           </EuiFlexItem>
+          {!job.persisted && (
+            <EuiFlexItem grow={false}>
+              <EuiBadge color="default">Built-in</EuiBadge>
+            </EuiFlexItem>
+          )}
           {job.paused && (
             <EuiFlexItem grow={false}>
               <EuiBadge color="warning">Paused</EuiBadge>
@@ -305,16 +310,26 @@ export default function Scheduler() {
         {
           name: 'Delete',
           description: 'Remove job',
-          render: (job: ScheduledJob) => (
-            <EuiToolTip content="Remove">
-              <EuiButtonIcon
-                iconType="trash"
-                aria-label="Remove"
-                color="danger"
-                onClick={() => setDeleteTarget(job.name)}
-              />
-            </EuiToolTip>
-          ),
+          render: (job: ScheduledJob) =>
+            job.persisted ? (
+              <EuiToolTip content="Remove">
+                <EuiButtonIcon
+                  iconType="trash"
+                  aria-label="Remove"
+                  color="danger"
+                  onClick={() => setDeleteTarget(job.name)}
+                />
+              </EuiToolTip>
+            ) : (
+              <EuiToolTip content="Built-in jobs cannot be removed">
+                <EuiButtonIcon
+                  iconType="trash"
+                  aria-label="Remove (disabled)"
+                  color="text"
+                  isDisabled
+                />
+              </EuiToolTip>
+            ),
         },
       ],
     },
