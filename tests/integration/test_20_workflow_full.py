@@ -195,70 +195,103 @@ class TestFullLifecycle:
 
     def test_03_load_data(self, es_client, test_prefixes):
         """Load test documents into the data stream."""
-        # Index into the data stream name (not a specific backing index)
-        data_stream = f"{test_prefixes.repo_name_prefix}-data-test"
-        success = _load_test_data(es_client, data_stream, NUM_TEST_DOCS)
+        ds_name = test_prefixes.data_stream_name
+        success = _load_test_data(es_client, ds_name, NUM_TEST_DOCS)
         assert success >= NUM_TEST_DOCS * 0.9, f"Only {success}/{NUM_TEST_DOCS} docs indexed"
 
         # Verify the data stream was created
-        ds = es_client.indices.get_data_stream(name=data_stream)
-        assert len(ds.get("data_streams", [])) == 1, f"Data stream not created: {ds}"
-        logger.info("Test data loaded: %d docs into data stream '%s'", success, data_stream)
+        ds = es_client.indices.get_data_stream(name=ds_name)
+        streams = ds.get("data_streams", [])
+        assert len(streams) == 1, f"Data stream not created: {ds}"
+        backing = streams[0].get("indices", [])
+        logger.info("Data stream '%s' created with %d backing index(es), %d docs loaded",
+                     ds_name, len(backing), success)
 
     def test_04_wait_for_rollover(self, es_client, test_prefixes):
         """Wait for ILM to rollover the hot index (should happen after ~3 minutes)."""
-        # Data stream backing indices are named .ds-{name}-YYYY.MM.DD-NNNNNN
-        pattern = f".ds-{test_prefixes.repo_name_prefix}-data-*"
+        ds_name = test_prefixes.data_stream_name
 
-        def _rolled_over():
-            indices = _get_ilm_explain(es_client, pattern)
-            # After rollover, there should be more than one backing index
-            if len(indices) > 1:
-                return True
-            # Or the first index should no longer be in hot
-            return any(info.get("phase") != "hot" for info in indices.values())
+        def _backing_count():
+            try:
+                ds = es_client.indices.get_data_stream(name=ds_name)
+                streams = ds.get("data_streams", [])
+                if streams:
+                    return len(streams[0].get("indices", []))
+            except Exception:
+                pass
+            return 0
 
         def _diag():
-            indices = _get_ilm_explain(es_client, pattern)
-            return json.dumps(
-                {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
-                 for k, v in indices.items()},
-                indent=2,
-            )
+            try:
+                ds = es_client.indices.get_data_stream(name=ds_name)
+                streams = ds.get("data_streams", [])
+                if not streams:
+                    return f"Data stream '{ds_name}' not found"
+                backing = [idx["index_name"] for idx in streams[0].get("indices", [])]
+                ilm = _get_ilm_explain(es_client, ",".join(backing)) if backing else {}
+                return json.dumps({
+                    "backing_indices": backing,
+                    "ilm": {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
+                            for k, v in ilm.items()},
+                }, indent=2)
+            except Exception as e:
+                return f"diagnostic error: {e}"
 
-        logger.info("Waiting for ILM rollover (timeout: 10m)...")
+        logger.info("Waiting for ILM rollover on data stream '%s' (timeout: 10m)...", ds_name)
         wait_for(
-            _rolled_over,
+            lambda: _backing_count() >= 2,
             timeout=600,
             initial_interval=10,
             max_interval=15,
-            description="ILM rollover",
+            description="ILM rollover (2+ backing indices)",
             on_timeout=_diag,
         )
-        logger.info("Rollover detected")
+        logger.info("Rollover detected: %d backing indices", _backing_count())
 
     def test_05_wait_for_frozen_phase(self, es_client, test_prefixes):
-        """Wait for at least one index to reach the frozen ILM phase."""
-        pattern = f".ds-{test_prefixes.repo_name_prefix}-data-*"
+        """Wait for at least one backing index to reach the frozen ILM phase."""
+        ds_name = test_prefixes.data_stream_name
+
+        def _check():
+            try:
+                ds = es_client.indices.get_data_stream(name=ds_name)
+                streams = ds.get("data_streams", [])
+                if not streams:
+                    return False
+                backing = [idx["index_name"] for idx in streams[0].get("indices", [])]
+                if not backing:
+                    return False
+                ilm = _get_ilm_explain(es_client, ",".join(backing))
+                return any(info.get("phase") == "frozen" for info in ilm.values())
+            except Exception:
+                return False
 
         def _diag():
-            indices = _get_ilm_explain(es_client, pattern)
-            return json.dumps(
-                {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
-                 for k, v in indices.items()},
-                indent=2,
-            )
+            try:
+                ds = es_client.indices.get_data_stream(name=ds_name)
+                streams = ds.get("data_streams", [])
+                if not streams:
+                    return f"Data stream '{ds_name}' not found"
+                backing = [idx["index_name"] for idx in streams[0].get("indices", [])]
+                ilm = _get_ilm_explain(es_client, ",".join(backing)) if backing else {}
+                return json.dumps({
+                    "backing_indices": backing,
+                    "ilm": {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
+                            for k, v in ilm.items()},
+                }, indent=2)
+            except Exception as e:
+                return f"diagnostic error: {e}"
 
-        logger.info("Waiting for ILM frozen phase (timeout: 30m)...")
+        logger.info("Waiting for ILM frozen phase on '%s' (timeout: 30m)...", ds_name)
         wait_for(
-            lambda: _any_index_in_phase(es_client, pattern, "frozen"),
+            _check,
             timeout=1800,
             initial_interval=15,
             max_interval=30,
             description="ILM frozen phase",
             on_timeout=_diag,
         )
-        logger.info("At least one index reached frozen phase")
+        logger.info("At least one backing index reached frozen phase")
 
     def test_06_rotate(self, runner, test_config_file, es_client, test_prefixes):
         """Rotate to create a new repository and archive old ones."""
@@ -311,7 +344,7 @@ class TestFullLifecycle:
     def test_11_verify_queryable(self, es_client, test_prefixes):
         """Verify that thawed indices are searchable."""
         # Search the data stream (covers all backing indices)
-        pattern = f"{test_prefixes.repo_name_prefix}-data-test"
+        pattern = test_prefixes.data_stream_name
         try:
             result = es_client.search(
                 index=pattern,
