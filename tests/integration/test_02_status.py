@@ -48,12 +48,13 @@ class TestStatusCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "status", "--repos",
+            "status", "--porcelain",
         ])
         assert result.exit_code == 0
-        # Rich tables truncate names (e.g., "deepfre…"), so check a short prefix
-        # or use porcelain mode for exact matching
-        assert live_repo_prefix[:6] in result.output, (
-            f"Expected repo prefix '{live_repo_prefix}' (or truncated) in status output.\n"
-            f"Output:\n{result.output[:500]}"
+        data = json.loads(result.output)
+        repos = data.get("repositories", [])
+        matching = [r for r in repos if r.get("name", "").startswith(live_repo_prefix)]
+        assert len(matching) > 0, (
+            f"Expected at least one repo with prefix '{live_repo_prefix}' in porcelain output. "
+            f"Got {len(repos)} repos: {[r.get('name') for r in repos[:5]]}"
         )
