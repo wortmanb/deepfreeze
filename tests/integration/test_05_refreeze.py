@@ -16,11 +16,8 @@ def runner():
 class TestRefreezeCLI:
     """Refreeze command via CliRunner — uses --porcelain for output."""
 
-    def test_refreeze_dry_run(self, runner, test_config_file, cluster_initialized):
+    def test_refreeze_dry_run(self, runner, test_config_file):
         """Refreeze --dry-run should exit 0 without changing state."""
-        if not cluster_initialized:
-            pytest.skip("Cluster not initialized — refreeze requires setup")
-
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
@@ -28,11 +25,8 @@ class TestRefreezeCLI:
         ])
         assert result.exit_code == 0, f"Refreeze dry-run failed:\n{result.output}\n{result.exception}"
 
-    def test_refreeze_all(self, runner, test_config_file, cluster_initialized):
+    def test_refreeze_all(self, runner, test_config_file):
         """Refreeze all completed requests (may be a no-op if none are completed)."""
-        if not cluster_initialized:
-            pytest.skip("Cluster not initialized — refreeze requires setup")
-
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",

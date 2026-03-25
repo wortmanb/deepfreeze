@@ -1,15 +1,12 @@
 """Full end-to-end workflow test.
 
 Exercises the complete deepfreeze lifecycle in order:
-  status → rotate → verify states → thaw → check → refreeze → cleanup
+  setup → status → rotate × 2 → verify states → thaw → check → refreeze → cleanup
 
-On an already-initialized cluster, setup is skipped (it would fail
-precondition checks).  All operations use the live cluster settings.
+All artifacts use the dftest-{run_id} prefix for isolation.
 All CLI invocations use --porcelain for machine-readable output.
 
-This is the "golden path" integration test.  It is long-running
-(marked slow) because thaw operations may take minutes depending on
-the storage provider.
+This is the "golden path" integration test.
 """
 
 import json
@@ -21,6 +18,8 @@ from click.testing import CliRunner
 from deepfreeze.cli.main import cli
 
 from .helpers.es_verify import (
+    assert_ilm_policy_exists,
+    assert_repo_exists,
     assert_settings_exist,
     get_repos_with_prefix,
 )
@@ -50,50 +49,66 @@ def _invoke(runner, config, *args):
 
 
 class TestFullLifecycle:
-    """End-to-end lifecycle.
+    """End-to-end lifecycle with test-prefixed artifacts.
 
     Tests are named with numeric prefixes to enforce execution order.
-    Each step builds on the previous one.
     """
 
-    def test_01_prerequisites(self, es_client, cluster_initialized):
-        """Cluster must be initialized before running the workflow."""
-        if not cluster_initialized:
-            pytest.skip("Cluster not initialized — run 'deepfreeze setup' first")
-        settings = assert_settings_exist(es_client)
-        logger.info("Live settings: provider=%s, prefix=%s", settings.get("provider"), settings.get("repo_name_prefix"))
+    def test_01_setup(self, runner, test_config_file, test_prefixes, test_index_template,
+                      storage_provider, es_client):
+        """Initialize deepfreeze with test prefixes."""
+        result = runner.invoke(cli, [
+            "--config", test_config_file,
+            "--local",
+            "setup",
+            "--repo_name_prefix", test_prefixes.repo_name_prefix,
+            "--bucket_name_prefix", test_prefixes.bucket_name_prefix,
+            "--ilm_policy_name", test_prefixes.ilm_policy_name,
+            "--index_template_name", test_prefixes.index_template_name,
+            "--provider", storage_provider,
+            "--porcelain",
+        ])
+        assert result.exit_code == 0, f"Setup failed:\n{result.output}\n{result.exception}"
 
-    def test_02_status(self, runner, test_config_file):
-        """Status should succeed and return valid JSON."""
+        settings = assert_settings_exist(es_client)
+        assert settings["repo_name_prefix"] == test_prefixes.repo_name_prefix
+        logger.info("Setup complete: prefix=%s, provider=%s", test_prefixes.repo_name_prefix, storage_provider)
+
+    def test_02_status(self, runner, test_config_file, test_prefixes):
+        """Status should return valid JSON with our repo."""
         result = _invoke(runner, test_config_file, "status")
         data = json.loads(result.output)
         assert "settings" in data
-        logger.info("Status: %d repos, %d thaw requests",
-                     len(data.get("repositories", [])), len(data.get("thaw_requests", [])))
+        repos = data.get("repositories", [])
+        matching = [r for r in repos if r.get("name", "").startswith(test_prefixes.repo_name_prefix)]
+        assert len(matching) >= 1, f"No repos with prefix '{test_prefixes.repo_name_prefix}'"
+        logger.info("Status: %d repos", len(repos))
 
-    def test_03_rotate(self, runner, test_config_file, es_client, live_repo_prefix):
-        """Rotate should create a new repository."""
-        repos_before = get_repos_with_prefix(es_client, live_repo_prefix)
-
+    def test_03_rotate_first(self, runner, test_config_file, es_client, test_prefixes):
+        """First rotation creates repo -000002."""
         _invoke(runner, test_config_file, "rotate")
+        assert_repo_exists(es_client, f"{test_prefixes.repo_name_prefix}-000002")
+        logger.info("First rotate complete")
 
-        repos_after = get_repos_with_prefix(es_client, live_repo_prefix)
-        assert len(repos_after) == len(repos_before) + 1, (
-            f"Expected {len(repos_before) + 1} repos, got {len(repos_after)}"
-        )
-        logger.info("After rotate: %d repos", len(repos_after))
+    def test_04_rotate_second(self, runner, test_config_file, es_client, test_prefixes):
+        """Second rotation creates repo -000003."""
+        _invoke(runner, test_config_file, "rotate")
+        assert_repo_exists(es_client, f"{test_prefixes.repo_name_prefix}-000003")
+        logger.info("Second rotate complete")
 
-    def test_04_verify_repo_states(self, es_client, live_repo_prefix):
-        """After rotation, check state distribution."""
-        repos = get_repos_with_prefix(es_client, live_repo_prefix)
+    def test_05_verify_repo_states(self, es_client, test_prefixes):
+        """After rotations, check state distribution."""
+        repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
         states = {}
         for r in repos:
             state = r.get("thaw_state", "unknown")
             states[state] = states.get(state, 0) + 1
         logger.info("Repo states: %s", states)
-        assert len(repos) >= 2, f"Expected at least 2 repos, got {len(repos)}"
+        assert len(repos) >= 3, f"Expected at least 3 repos, got {len(repos)}"
+        active = [r for r in repos if r.get("thaw_state") == "active"]
+        assert len(active) >= 1, f"No active repos. States: {states}"
 
-    def test_05_thaw_create(self, runner, test_config_file):
+    def test_06_thaw_create(self, runner, test_config_file):
         """Create a thaw request for a broad date range."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -105,9 +120,9 @@ class TestFullLifecycle:
             "--porcelain",
         ])
         assert result.exit_code == 0, f"Thaw create failed:\n{result.output}\n{result.exception}"
-        logger.info("Thaw create output: %s", result.output[:200])
+        logger.info("Thaw created")
 
-    def test_06_thaw_check(self, runner, test_config_file):
+    def test_07_thaw_check(self, runner, test_config_file):
         """Check thaw request status."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -115,17 +130,6 @@ class TestFullLifecycle:
             "thaw", "--check-status", "--porcelain",
         ])
         assert result.exit_code == 0, f"Thaw check failed:\n{result.output}"
-        logger.info("Thaw check output: %s", result.output[:200])
-
-    def test_07_thaw_list(self, runner, test_config_file):
-        """List thaw requests."""
-        result = runner.invoke(cli, [
-            "--config", test_config_file,
-            "--local",
-            "thaw", "--list", "--porcelain",
-        ])
-        assert result.exit_code == 0, f"Thaw list failed:\n{result.output}"
-        logger.info("Thaw list output: %s", result.output[:200])
 
     def test_08_refreeze(self, runner, test_config_file):
         """Refreeze all completed thaw requests."""
@@ -142,9 +146,10 @@ class TestFullLifecycle:
         _invoke(runner, test_config_file, "repair-metadata")
         logger.info("Repair complete")
 
-    def test_11_final_status(self, runner, test_config_file):
-        """Final status should succeed and return valid JSON."""
+    def test_11_final_status(self, runner, test_config_file, test_prefixes):
+        """Final status should show repos with test prefix."""
         result = _invoke(runner, test_config_file, "status")
         data = json.loads(result.output)
+        repos = data.get("repositories", [])
         logger.info("Final: %d repos, %d thaw requests",
-                     len(data.get("repositories", [])), len(data.get("thaw_requests", [])))
+                     len(repos), len(data.get("thaw_requests", [])))

@@ -42,3 +42,10 @@ class TestPrerequisites:
         assert s3.test_connection(), (
             f"Storage provider '{storage_provider}' failed connection test"
         )
+
+    def test_cluster_is_clean(self, es_client):
+        """Cluster should not have a deepfreeze-status index (enforced by es_client fixture)."""
+        from deepfreeze_core.constants import STATUS_INDEX
+        assert not es_client.indices.exists(index=STATUS_INDEX), (
+            f"'{STATUS_INDEX}' index exists — tests require a clean cluster"
+        )

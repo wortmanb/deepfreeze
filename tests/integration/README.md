@@ -21,9 +21,19 @@ Tests load config from (in priority order):
 
 The config must contain a valid `elasticsearch` section and `storage` credentials for your provider.
 
+## Clean Cluster Requirement
+
+Tests require a **clean Elasticsearch cluster** — one where deepfreeze has NOT been initialized (no `deepfreeze-status` index). If the index exists, the test session fails immediately with instructions.
+
+To clean up a cluster for testing:
+```bash
+curl -X DELETE '<host>:9200/deepfreeze-status'
+curl -X DELETE '<host>:9200/deepfreeze-audit'
+```
+
 ## Test Isolation
 
-Every test run generates a unique prefix (e.g., `dftest-a3b7c2`). All artifacts — repos, buckets, ILM policies — use this prefix. Cleanup runs automatically at session end. Safe for shared clusters.
+Every test run generates a unique prefix (e.g., `dftest-a3b7c2`). All artifacts — repos, buckets, ILM policies — use this prefix. Setup runs with test prefixes. Cleanup removes everything (including the status/audit indices) at session end.
 
 ## Running Tests
 
