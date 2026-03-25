@@ -197,6 +197,12 @@ export const api = {
       body: JSON.stringify(job),
     }),
 
+  updateScheduledJob: (name: string, job: AddScheduledJobRequest) =>
+    request<{ name: string; status: string }>(`/scheduler/jobs/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(job),
+    }),
+
   removeScheduledJob: (name: string) =>
     request<{ name: string; status: string }>(`/scheduler/jobs/${encodeURIComponent(name)}`, {
       method: 'DELETE',

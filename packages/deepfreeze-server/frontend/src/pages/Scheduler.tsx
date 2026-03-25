@@ -34,7 +34,8 @@ import RefreshControl from '../components/RefreshControl';
 
 // -- Schedule mode types --
 
-type ScheduleMode = 'every_n_days' | 'day_of_month' | 'day_of_week' | 'cron';
+type ScheduleMode = 'interval' | 'day_of_month' | 'day_of_week' | 'cron';
+type IntervalUnit = 'hours' | 'days' | 'weeks' | 'months';
 
 interface ScheduleModeOption {
   value: ScheduleMode;
@@ -42,10 +43,17 @@ interface ScheduleModeOption {
 }
 
 const scheduleModes: ScheduleModeOption[] = [
-  { value: 'every_n_days', text: 'Every N days' },
+  { value: 'interval', text: 'Every N ...' },
   { value: 'day_of_month', text: 'Day of each month' },
   { value: 'day_of_week', text: 'Day of the week' },
   { value: 'cron', text: 'Cron expression (advanced)' },
+];
+
+const intervalUnits: { value: IntervalUnit; text: string }[] = [
+  { value: 'hours', text: 'hours' },
+  { value: 'days', text: 'days' },
+  { value: 'weeks', text: 'weeks' },
+  { value: 'months', text: 'months' },
 ];
 
 const weekdays = [
@@ -66,13 +74,35 @@ const jobActions = [
   { value: 'refreeze', text: 'Refreeze' },
 ];
 
-function buildCron(mode: ScheduleMode, values: { days?: number; dayOfMonth?: number; dayOfWeek?: string; hour?: number; minute?: number; cron?: string }): string | null {
+const UNIT_SECONDS: Record<IntervalUnit, number> = {
+  hours: 3600,
+  days: 86400,
+  weeks: 604800,
+  months: 2592000, // 30 days
+};
+
+function intervalToSeconds(n: number, unit: IntervalUnit): number {
+  return n * UNIT_SECONDS[unit];
+}
+
+/** Try to decompose interval_seconds into a friendly (N, unit) pair. */
+function secondsToInterval(secs: number): { n: number; unit: IntervalUnit } {
+  // Try largest unit first
+  for (const unit of ['months', 'weeks', 'days', 'hours'] as IntervalUnit[]) {
+    const factor = UNIT_SECONDS[unit];
+    if (secs >= factor && secs % factor === 0) {
+      return { n: secs / factor, unit };
+    }
+  }
+  return { n: Math.round(secs / 3600), unit: 'hours' };
+}
+
+function buildCron(mode: ScheduleMode, values: { dayOfMonth?: number; dayOfWeek?: string; hour?: number; minute?: number; cron?: string }): string | null {
   const h = values.hour ?? 2;
   const m = values.minute ?? 0;
   switch (mode) {
-    case 'every_n_days':
-      // interval-based, return null to use interval_seconds instead
-      return null;
+    case 'interval':
+      return null; // interval-based, use interval_seconds
     case 'day_of_month':
       return `${m} ${h} ${values.dayOfMonth ?? 1} * *`;
     case 'day_of_week':
@@ -84,28 +114,36 @@ function buildCron(mode: ScheduleMode, values: { days?: number; dayOfMonth?: num
 
 function describeCron(cron: string | null, intervalSeconds: number | null): string {
   if (intervalSeconds != null && intervalSeconds > 0) {
-    const hours = intervalSeconds / 3600;
-    const days = intervalSeconds / 86400;
-    if (days >= 1 && days === Math.floor(days)) return `Every ${days} day${days > 1 ? 's' : ''}`;
-    if (hours >= 1 && hours === Math.floor(hours)) return `Every ${hours} hour${hours > 1 ? 's' : ''}`;
-    return `Every ${intervalSeconds}s`;
+    const { n, unit } = secondsToInterval(intervalSeconds);
+    const label = n === 1 ? unit.replace(/s$/, '') : unit;
+    return `Every ${n} ${label}`;
   }
   if (!cron) return '--';
   const parts = cron.split(/\s+/);
   if (parts.length !== 5) return cron;
   const [min, hour, dom, , dow] = parts;
 
-  // Day of week
   if (dom === '*' && dow !== '*') {
     const day = weekdays.find(w => w.value === dow);
     return `Every ${day?.text ?? `weekday ${dow}`} at ${hour}:${min.padStart(2, '0')}`;
   }
-  // Day of month
   if (dom !== '*' && dow === '*') {
     const suffix = dom === '1' || dom === '21' || dom === '31' ? 'st' : dom === '2' || dom === '22' ? 'nd' : dom === '3' || dom === '23' ? 'rd' : 'th';
     return `${dom}${suffix} of each month at ${hour}:${min.padStart(2, '0')}`;
   }
   return cron;
+}
+
+/** Infer schedule mode from a ScheduledJob for pre-populating the edit form. */
+function inferScheduleMode(job: ScheduledJob): ScheduleMode {
+  if (job.interval_seconds != null && job.interval_seconds > 0) return 'interval';
+  if (!job.cron) return 'cron';
+  const parts = job.cron.split(/\s+/);
+  if (parts.length !== 5) return 'cron';
+  const [, , dom, , dow] = parts;
+  if (dom !== '*' && dow === '*') return 'day_of_month';
+  if (dom === '*' && dow !== '*') return 'day_of_week';
+  return 'cron';
 }
 
 interface Toast {
@@ -119,15 +157,17 @@ export default function Scheduler() {
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
+  const [modalMode, setModalMode] = useState<'add' | 'edit' | null>(null);
+  const [editingName, setEditingName] = useState<string | null>(null); // original name when editing
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // Add form state
+  // Form state
   const [jobName, setJobName] = useState('');
   const [jobAction, setJobAction] = useState('rotate');
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('day_of_month');
-  const [everyNDays, setEveryNDays] = useState(30);
+  const [intervalN, setIntervalN] = useState(30);
+  const [intervalUnit, setIntervalUnit] = useState<IntervalUnit>('days');
   const [dayOfMonth, setDayOfMonth] = useState(1);
   const [dayOfWeek, setDayOfWeek] = useState('5');
   const [hour, setHour] = useState(2);
@@ -135,7 +175,7 @@ export default function Scheduler() {
   const [cronExpr, setCronExpr] = useState('');
   const [keepParam, setKeepParam] = useState(6);
   const [showParams, setShowParams] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const addToast = useCallback((title: string, color: Toast['color'], text?: string) => {
     setToasts(prev => [...prev, { id: String(Date.now()), title, color, text }]);
@@ -156,6 +196,118 @@ export default function Scheduler() {
   }, [addToast]);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  const resetForm = () => {
+    setJobName('');
+    setJobAction('rotate');
+    setScheduleMode('day_of_month');
+    setIntervalN(30);
+    setIntervalUnit('days');
+    setDayOfMonth(1);
+    setDayOfWeek('5');
+    setHour(2);
+    setMinute(0);
+    setCronExpr('');
+    setKeepParam(6);
+    setShowParams(false);
+    setEditingName(null);
+  };
+
+  const openAdd = () => {
+    resetForm();
+    setModalMode('add');
+  };
+
+  const openEdit = (job: ScheduledJob) => {
+    setEditingName(job.name);
+    setJobName(job.name);
+    setJobAction(job.action);
+
+    const mode = inferScheduleMode(job);
+    setScheduleMode(mode);
+
+    if (mode === 'interval' && job.interval_seconds) {
+      const { n, unit } = secondsToInterval(job.interval_seconds);
+      setIntervalN(n);
+      setIntervalUnit(unit);
+    }
+    if (mode === 'day_of_month' && job.cron) {
+      const parts = job.cron.split(/\s+/);
+      setMinute(Number(parts[0]) || 0);
+      setHour(Number(parts[1]) || 2);
+      setDayOfMonth(Number(parts[2]) || 1);
+    }
+    if (mode === 'day_of_week' && job.cron) {
+      const parts = job.cron.split(/\s+/);
+      setMinute(Number(parts[0]) || 0);
+      setHour(Number(parts[1]) || 2);
+      setDayOfWeek(parts[4] || '1');
+    }
+    if (mode === 'cron' && job.cron) {
+      setCronExpr(job.cron);
+    }
+
+    const keep = job.params?.keep;
+    if (typeof keep === 'number') {
+      setKeepParam(keep);
+      setShowParams(true);
+    } else {
+      setKeepParam(6);
+      setShowParams(false);
+    }
+
+    setModalMode('edit');
+  };
+
+  const closeModal = () => {
+    setModalMode(null);
+    resetForm();
+  };
+
+  const buildRequest = () => {
+    const params: Record<string, unknown> = {};
+    if (jobAction === 'rotate' && showParams && keepParam > 0) params.keep = keepParam;
+
+    if (scheduleMode === 'interval') {
+      return {
+        name: jobName.trim(),
+        action: jobAction,
+        params,
+        interval_seconds: intervalToSeconds(intervalN, intervalUnit),
+      };
+    }
+    const cron = buildCron(scheduleMode, { dayOfMonth, dayOfWeek, hour, minute, cron: cronExpr });
+    if (!cron) return null;
+    return {
+      name: jobName.trim(),
+      action: jobAction,
+      params,
+      cron,
+    };
+  };
+
+  const handleSubmit = async () => {
+    if (!jobName.trim()) { addToast('Name is required', 'warning'); return; }
+    const req = buildRequest();
+    if (!req) { addToast('Invalid schedule', 'warning'); return; }
+
+    setSubmitting(true);
+    try {
+      if (modalMode === 'edit' && editingName) {
+        await api.updateScheduledJob(editingName, req);
+        addToast(`Updated "${req.name}"`, 'success');
+      } else {
+        await api.addScheduledJob(req);
+        addToast(`Added "${req.name}"`, 'success');
+      }
+      closeModal();
+      await fetchJobs();
+    } catch (err) {
+      addToast(`Failed to ${modalMode} job`, 'danger', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   const handleTogglePause = async (job: ScheduledJob) => {
     try {
@@ -185,58 +337,11 @@ export default function Scheduler() {
     }
   };
 
-  const handleAdd = async () => {
-    if (!jobName.trim()) { addToast('Name is required', 'warning'); return; }
-    setAdding(true);
-    try {
-      const params: Record<string, unknown> = {};
-      if (jobAction === 'rotate' && keepParam > 0) params.keep = keepParam;
-
-      if (scheduleMode === 'every_n_days') {
-        await api.addScheduledJob({
-          name: jobName.trim(),
-          action: jobAction,
-          params,
-          interval_seconds: everyNDays * 86400,
-        });
-      } else {
-        const cron = buildCron(scheduleMode, { dayOfMonth, dayOfWeek, hour, minute, cron: cronExpr });
-        if (!cron) { addToast('Invalid schedule', 'warning'); setAdding(false); return; }
-        await api.addScheduledJob({
-          name: jobName.trim(),
-          action: jobAction,
-          params,
-          cron,
-        });
-      }
-      addToast(`Added "${jobName.trim()}"`, 'success');
-      setShowAdd(false);
-      resetForm();
-      await fetchJobs();
-    } catch (err) {
-      addToast('Failed to add job', 'danger', err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const resetForm = () => {
-    setJobName('');
-    setJobAction('rotate');
-    setScheduleMode('day_of_month');
-    setEveryNDays(30);
-    setDayOfMonth(1);
-    setDayOfWeek('5');
-    setHour(2);
-    setMinute(0);
-    setCronExpr('');
-    setKeepParam(6);
-    setShowParams(false);
-  };
-
-  // Preview of what the schedule will be
   const getPreview = (): string => {
-    if (scheduleMode === 'every_n_days') return `Every ${everyNDays} day${everyNDays > 1 ? 's' : ''}`;
+    if (scheduleMode === 'interval') {
+      const label = intervalN === 1 ? intervalUnit.replace(/s$/, '') : intervalUnit;
+      return `Every ${intervalN} ${label}`;
+    }
     const cron = buildCron(scheduleMode, { dayOfMonth, dayOfWeek, hour, minute, cron: cronExpr });
     if (!cron) return '--';
     if (scheduleMode === 'cron') return cron;
@@ -291,8 +396,32 @@ export default function Scheduler() {
     },
     {
       name: 'Actions',
-      width: '100px',
+      width: '130px',
       actions: [
+        {
+          name: 'Edit',
+          description: 'Edit job',
+          render: (job: ScheduledJob) =>
+            job.persisted ? (
+              <EuiToolTip content="Edit">
+                <EuiButtonIcon
+                  iconType="pencil"
+                  aria-label="Edit"
+                  color="primary"
+                  onClick={() => openEdit(job)}
+                />
+              </EuiToolTip>
+            ) : (
+              <EuiToolTip content="Built-in jobs cannot be edited">
+                <EuiButtonIcon
+                  iconType="pencil"
+                  aria-label="Edit (disabled)"
+                  color="text"
+                  isDisabled
+                />
+              </EuiToolTip>
+            ),
+        },
         {
           name: 'Toggle',
           description: 'Pause or resume',
@@ -347,7 +476,7 @@ export default function Scheduler() {
               <RefreshControl onRefresh={fetchJobs} loading={loading} defaultInterval={0} />
             </EuiFlexItem>
             <EuiFlexItem grow={false}>
-              <EuiButton iconType="plusInCircle" fill onClick={() => setShowAdd(true)}>
+              <EuiButton iconType="plusInCircle" fill onClick={openAdd}>
                 Add Scheduled Job
               </EuiButton>
             </EuiFlexItem>
@@ -376,11 +505,13 @@ export default function Scheduler() {
         />
       </EuiPanel>
 
-      {/* Add Job Modal */}
-      {showAdd && (
-        <EuiModal onClose={() => { setShowAdd(false); resetForm(); }} style={{ width: 540 }}>
+      {/* Add / Edit Job Modal */}
+      {modalMode && (
+        <EuiModal onClose={closeModal} style={{ width: 540 }}>
           <EuiModalHeader>
-            <EuiModalHeaderTitle>Add Scheduled Job</EuiModalHeaderTitle>
+            <EuiModalHeaderTitle>
+              {modalMode === 'edit' ? 'Edit Scheduled Job' : 'Add Scheduled Job'}
+            </EuiModalHeaderTitle>
           </EuiModalHeader>
           <EuiModalBody>
             <EuiForm>
@@ -410,10 +541,23 @@ export default function Scheduler() {
                 />
               </EuiFormRow>
 
-              {scheduleMode === 'every_n_days' && (
-                <EuiFormRow label="Run every N days">
-                  <EuiFieldNumber value={everyNDays} onChange={e => setEveryNDays(Number(e.target.value))} min={1} max={365} />
-                </EuiFormRow>
+              {scheduleMode === 'interval' && (
+                <EuiFlexGroup gutterSize="m">
+                  <EuiFlexItem>
+                    <EuiFormRow label="Every">
+                      <EuiFieldNumber value={intervalN} onChange={e => setIntervalN(Number(e.target.value))} min={1} max={999} />
+                    </EuiFormRow>
+                  </EuiFlexItem>
+                  <EuiFlexItem>
+                    <EuiFormRow label="Unit">
+                      <EuiSelect
+                        options={intervalUnits}
+                        value={intervalUnit}
+                        onChange={e => setIntervalUnit(e.target.value as IntervalUnit)}
+                      />
+                    </EuiFormRow>
+                  </EuiFlexItem>
+                </EuiFlexGroup>
               )}
 
               {scheduleMode === 'day_of_month' && (
@@ -458,7 +602,7 @@ export default function Scheduler() {
               <EuiPanel color="subdued" paddingSize="s">
                 <EuiText size="s">
                   <strong>Schedule preview:</strong> {getPreview()}
-                  {scheduleMode !== 'cron' && scheduleMode !== 'every_n_days' && (
+                  {scheduleMode !== 'cron' && scheduleMode !== 'interval' && (
                     <> &mdash; <EuiCode>{buildCron(scheduleMode, { dayOfMonth, dayOfWeek, hour, minute }) ?? ''}</EuiCode></>
                   )}
                 </EuiText>
@@ -483,8 +627,10 @@ export default function Scheduler() {
             </EuiForm>
           </EuiModalBody>
           <EuiModalFooter>
-            <EuiButtonEmpty onClick={() => { setShowAdd(false); resetForm(); }}>Cancel</EuiButtonEmpty>
-            <EuiButton fill onClick={handleAdd} isLoading={adding}>Add Job</EuiButton>
+            <EuiButtonEmpty onClick={closeModal}>Cancel</EuiButtonEmpty>
+            <EuiButton fill onClick={handleSubmit} isLoading={submitting}>
+              {modalMode === 'edit' ? 'Save Changes' : 'Add Job'}
+            </EuiButton>
           </EuiModalFooter>
         </EuiModal>
       )}
