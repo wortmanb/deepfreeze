@@ -16,11 +16,8 @@ def runner():
 class TestCleanupCLI:
     """Cleanup command via CliRunner — uses --porcelain for output."""
 
-    def test_cleanup_dry_run(self, runner, test_config_file, cluster_initialized):
+    def test_cleanup_dry_run(self, runner, test_config_file):
         """Cleanup --dry-run should exit 0."""
-        if not cluster_initialized:
-            pytest.skip("Cluster not initialized — cleanup requires setup")
-
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
@@ -28,11 +25,8 @@ class TestCleanupCLI:
         ])
         assert result.exit_code == 0, f"Cleanup dry-run failed:\n{result.output}\n{result.exception}"
 
-    def test_cleanup_runs(self, runner, test_config_file, cluster_initialized):
+    def test_cleanup_runs(self, runner, test_config_file):
         """Cleanup should complete without error."""
-        if not cluster_initialized:
-            pytest.skip("Cluster not initialized — cleanup requires setup")
-
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",

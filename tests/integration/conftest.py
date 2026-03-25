@@ -1,16 +1,15 @@
 """Integration test fixtures.
 
-Session-scoped fixtures that provide:
-- Real ES client from config
-- Unique test-run prefix for artifact isolation
-- Temporary config file with test prefixes
-- Server process management
-- Automatic cleanup of test artifacts
+These tests require a CLEAN Elasticsearch cluster — one where deepfreeze
+has NOT been initialized (no ``deepfreeze-status`` index).  All artifacts
+are created with a unique ``dftest-{run_id}`` prefix for isolation.
+
+If the cluster already has a ``deepfreeze-status`` index, the session
+fails immediately with instructions to use a fresh cluster.
 """
 
 import logging
 import os
-import signal
 import socket
 import subprocess
 import tempfile
@@ -21,9 +20,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from deepfreeze_core.esclient import create_es_client
-
 from deepfreeze_core.constants import STATUS_INDEX
+from deepfreeze_core.esclient import create_es_client
 
 from .helpers.diagnostics import write_failure_diagnostics
 from .helpers.waiter import wait_for_server_ready
@@ -60,7 +58,7 @@ def integration_config():
     """Load ES config from env var or default location.
 
     Priority:
-    1. DEEPFREEZE_TEST_CONFIG env var → path to YAML file
+    1. DEEPFREEZE_TEST_CONFIG env var -> path to YAML file
     2. ~/.deepfreeze/config.yml
     """
     config_path = os.environ.get("DEEPFREEZE_TEST_CONFIG")
@@ -96,30 +94,33 @@ def es_client(integration_config):
     )
     logger.info("Connected to ES cluster: %s (status: %s)", health.get("cluster_name"), health["status"])
 
+    # Fail fast if cluster is already initialized
+    if client.indices.exists(index=STATUS_INDEX):
+        pytest.fail(
+            f"Cluster already has a '{STATUS_INDEX}' index. "
+            f"Integration tests require a clean cluster to ensure full isolation. "
+            f"Either use a fresh cluster or delete the index:\n"
+            f"  curl -X DELETE '<host>:9200/{STATUS_INDEX}'\n"
+            f"  curl -X DELETE '<host>:9200/deepfreeze-audit'"
+        )
+
     yield client
     client.close()
 
 
 @pytest.fixture(scope="session")
-def storage_provider(integration_config, live_settings):
+def storage_provider(integration_config):
     """The cloud storage provider.
 
     Priority:
     1. DEEPFREEZE_TEST_PROVIDER env var
-    2. Provider from live cluster settings (if initialized)
-    3. First provider in config with importable SDK
-    4. 'aws' as fallback
+    2. First provider in config with importable SDK
+    3. 'aws' as fallback
     """
-    # Explicit override
     env_provider = os.environ.get("DEEPFREEZE_TEST_PROVIDER")
     if env_provider:
         return env_provider
 
-    # From live settings
-    if live_settings and live_settings.get("provider"):
-        return live_settings["provider"]
-
-    # Detect from config — pick first provider whose SDK is importable
     storage = integration_config.get("storage", {})
     sdk_imports = {"aws": "boto3", "azure": "azure.storage.blob", "gcp": "google.cloud.storage"}
     for provider in ("aws", "gcp", "azure"):
@@ -147,12 +148,11 @@ def test_prefixes(test_run_id):
 
 @pytest.fixture(scope="session")
 def test_config_file(integration_config, test_prefixes):
-    """Temporary config YAML that merges real ES creds with test prefixes.
+    """Temporary config YAML with real ES creds.
 
     This is the file passed to ``--config`` for all CLI invocations.
     """
     config = dict(integration_config)
-    # Ensure logging is set
     config.setdefault("logging", {})["loglevel"] = "DEBUG"
 
     fd, path = tempfile.mkstemp(suffix=".yml", prefix="dftest-config-")
@@ -173,38 +173,10 @@ def test_config_file(integration_config, test_prefixes):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def cluster_initialized(es_client):
-    """Whether deepfreeze is already initialized on this cluster."""
-    return es_client.indices.exists(index=STATUS_INDEX)
-
-
-@pytest.fixture(scope="session")
-def live_settings(es_client, cluster_initialized):
-    """The actual deepfreeze settings from the cluster, or None."""
-    if not cluster_initialized:
-        return None
-    try:
-        from deepfreeze_core.constants import SETTINGS_ID
-        doc = es_client.get(index=STATUS_INDEX, id=SETTINGS_ID)
-        return doc["_source"]
-    except Exception:
-        return None
-
-
-@pytest.fixture(scope="session")
-def live_repo_prefix(live_settings):
-    """The repo_name_prefix from the live cluster settings."""
-    if live_settings:
-        return live_settings.get("repo_name_prefix", "deepfreeze")
-    return None
-
-
-@pytest.fixture(scope="session")
 def test_index_template(es_client, test_prefixes):
     """Create a minimal index template for the test run.
 
     Setup requires an existing index template to attach the ILM policy to.
-    This creates one with a pattern that won't match real data.
     """
     template_name = test_prefixes.index_template_name
     pattern = f"{test_prefixes.repo_name_prefix}-data-*"
@@ -220,9 +192,6 @@ def test_index_template(es_client, test_prefixes):
     )
     logger.info("Created test index template '%s' (pattern: %s)", template_name, pattern)
     yield template_name
-
-    # Cleanup handled by auto_cleanup
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +251,15 @@ def http_client(server_url):
 
 @pytest.fixture(scope="session", autouse=True)
 def auto_cleanup(es_client, test_prefixes, storage_provider):
-    """Yield, then clean up all test artifacts on session teardown."""
+    """Yield, then clean up ALL test artifacts on session teardown.
+
+    Removes everything created by this test run:
+    - The deepfreeze-status and deepfreeze-audit indices
+    - Snapshot repositories matching dftest-*
+    - ILM policies matching dftest-*
+    - Index templates matching dftest-*
+    - S3 buckets matching dftest-*
+    """
     yield
 
     prefix = test_prefixes.repo_name_prefix
@@ -320,25 +297,21 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
     except Exception:
         pass
 
-    # 4. Indices matching prefix
+    # 4. Status and audit indices (created by setup)
+    for idx in [STATUS_INDEX, "deepfreeze-audit"]:
+        try:
+            if es_client.indices.exists(index=idx):
+                es_client.indices.delete(index=idx)
+                logger.info("Deleted index: %s", idx)
+        except Exception as exc:
+            logger.warning("Failed to delete index '%s': %s", idx, exc)
+
+    # 5. Any other indices matching prefix
     try:
         es_client.indices.delete(index=f"{prefix}*", ignore_unavailable=True)
         logger.info("Deleted indices matching '%s*'", prefix)
     except Exception:
         pass
-
-    # 5. Status index docs matching prefix
-    from deepfreeze_core.constants import STATUS_INDEX
-    try:
-        if es_client.indices.exists(index=STATUS_INDEX):
-            es_client.delete_by_query(
-                index=STATUS_INDEX,
-                body={"query": {"prefix": {"name": prefix}}},
-                conflicts="proceed",
-            )
-            logger.info("Cleaned status docs with prefix '%s'", prefix)
-    except Exception as exc:
-        logger.warning("Failed to clean status docs: %s", exc)
 
     # 6. S3 buckets (best-effort)
     try:
