@@ -145,10 +145,25 @@ class DeepfreezeScheduler:
             return IntervalTrigger(seconds=cfg.interval_seconds)
         return None
 
+    def _has_in_progress_thaws(self) -> bool:
+        """Check the status cache for any in-progress thaw requests."""
+        cached = self._orch.status_cache.cached_status
+        if cached is None:
+            return True  # assume yes if cache not ready
+        return any(
+            r.get("status") == "in_progress"
+            for r in cached.thaw_requests
+        )
+
     async def _execute_scheduled_action(
         self, job_name: str, action: str, params: dict
     ) -> None:
         """Run a scheduled action through the orchestrator's job manager."""
+        # Skip thaw_check when no thaw requests are in progress
+        if action == "thaw_check" and not self._has_in_progress_thaws():
+            logger.debug("Skipping thaw_check: no in-progress thaw requests")
+            return
+
         logger.debug("Scheduler firing: %s (%s)", job_name, action)
 
         await self._orch.event_bus.publish(Event(
