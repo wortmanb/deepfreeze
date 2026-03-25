@@ -159,6 +159,13 @@ class TestFullLifecycle:
     data loading, ILM phase transitions, rotation, thaw, and refreeze.
     """
 
+    def test_00_set_ilm_poll_interval(self, es_client):
+        """Set ILM poll interval to 5s for faster phase transitions."""
+        es_client.cluster.put_settings(
+            body={"transient": {"indices.lifecycle.poll_interval": "5s"}}
+        )
+        logger.info("Set ILM poll interval to 5s")
+
     def test_01_setup(self, runner, test_config_file, test_prefixes, test_index_template,
                       storage_provider, es_client):
         """Initialize deepfreeze with test prefixes."""
@@ -328,3 +335,10 @@ class TestFullLifecycle:
         logger.info("Final: %d repos, %d thaw requests", len(repos), len(thaw_requests))
         for r in repos:
             logger.info("  %s: %s", r.get("name"), r.get("thaw_state"))
+
+    def test_17_restore_ilm_poll_interval(self, es_client):
+        """Restore ILM poll interval to default."""
+        es_client.cluster.put_settings(
+            body={"transient": {"indices.lifecycle.poll_interval": None}}
+        )
+        logger.info("Restored ILM poll interval to default")
