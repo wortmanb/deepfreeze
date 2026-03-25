@@ -129,6 +129,28 @@ class DeepfreezeScheduler:
         self._persisted_jobs.add(cfg.name)
         return {"name": cfg.name, "status": "added"}
 
+    def update_job(self, name: str, cfg: ScheduledJobConfig) -> dict[str, Any]:
+        """Update an existing scheduled job. Only persisted jobs can be updated."""
+        if name not in self._job_configs:
+            raise ValueError(f"Job '{name}' not found")
+        if name not in self._persisted_jobs:
+            raise ValueError(f"Job '{name}' is built-in and cannot be modified")
+        # Remove old APScheduler job
+        self._scheduler.remove_job(name)
+        del self._job_configs[name]
+        # If the name changed, clean up the old ES doc
+        if cfg.name != name:
+            self._delete_persisted_job(name)
+            self._persisted_jobs.discard(name)
+            if cfg.name in self._job_configs:
+                raise ValueError(f"Job '{cfg.name}' already exists")
+        # Re-add with new config
+        self._add_job(cfg)
+        self._persist_job(cfg, paused=False)
+        self._persisted_jobs.add(cfg.name)
+        logger.info("Updated scheduled job: %s", cfg.name)
+        return {"name": cfg.name, "status": "updated"}
+
     def remove_job(self, name: str) -> bool:
         """Remove a scheduled job. Returns True if removed."""
         if name not in self._job_configs:

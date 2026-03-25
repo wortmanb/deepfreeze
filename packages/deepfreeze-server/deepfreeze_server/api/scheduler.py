@@ -12,7 +12,7 @@ from .deps import get_orchestrator
 router = APIRouter()
 
 
-class AddJobRequest(BaseModel):
+class JobRequest(BaseModel):
     name: str
     action: str
     params: dict[str, Any] = {}
@@ -30,7 +30,7 @@ async def list_scheduled_jobs(
 
 @router.post("/scheduler/jobs")
 async def add_scheduled_job(
-    body: AddJobRequest,
+    body: JobRequest,
     orch: DeepfreezeOrchestrator = Depends(get_orchestrator),
 ):
     """Add a new scheduled job."""
@@ -46,6 +46,27 @@ async def add_scheduled_job(
         return result
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.put("/scheduler/jobs/{name}")
+async def update_scheduled_job(
+    name: str,
+    body: JobRequest,
+    orch: DeepfreezeOrchestrator = Depends(get_orchestrator),
+):
+    """Update an existing scheduled job."""
+    cfg = ScheduledJobConfig(
+        name=body.name,
+        action=body.action,
+        params=body.params,
+        cron=body.cron,
+        interval_seconds=body.interval_seconds,
+    )
+    try:
+        result = orch.scheduler.update_job(name, cfg)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/scheduler/jobs/{name}")
