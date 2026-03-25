@@ -4,9 +4,9 @@ Core library for Elasticsearch cloud storage archival operations.
 
 ## Overview
 
-This package provides the shared functionality for deepfreeze operations, used by both:
+This package provides the shared functionality for deepfreeze operations, used by:
 - **deepfreeze-cli**: Standalone CLI tool
-- **elasticsearch-curator**: Full Curator with deepfreeze support
+- **deepfreeze-server**: Persistent daemon with REST API and Web UI
 
 ## Supported Cloud Providers
 

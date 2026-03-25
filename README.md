@@ -1,47 +1,18 @@
 # Deepfreeze
 
-Elasticsearch S3 Glacier archival and lifecycle management.
+Elasticsearch cloud storage archival and lifecycle management.
 
-Deepfreeze enables you to archive Elasticsearch searchable snapshots to S3 Glacier storage and restore them on demand, providing significant cost savings for long-term data retention.
+Deepfreeze enables you to archive Elasticsearch searchable snapshots to cloud archive storage (AWS Glacier, Azure Archive, GCP Archive) and restore them on demand, providing significant cost savings for long-term data retention.
 
 ## Packages
 
 | Package | Description |
 |---------|-------------|
-| [deepfreeze-core](packages/deepfreeze-core/README.md) | Core domain logic library — actions, ES/S3 clients, audit |
+| [deepfreeze-core](packages/deepfreeze-core/README.md) | Core domain logic library — actions, ES/storage clients, audit |
 | [deepfreeze-cli](packages/deepfreeze-cli/README.md) | Standalone CLI tool (local or remote via server) |
 | [deepfreeze-server](packages/deepfreeze-server/README.md) | Persistent daemon — REST API, job management, SSE events, Web UI |
 
-### deepfreeze-core
-
-Core library providing the business logic for deepfreeze operations. Used by both the standalone CLI and Elasticsearch Curator.
-
-```bash
-pip install git+https://github.com/elastic/deepfreeze.git#subdirectory=packages/deepfreeze-core
-```
-
-### deepfreeze-cli
-
-Standalone CLI tool for managing Elasticsearch S3 Glacier archives.
-
-```bash
-pip install git+https://github.com/elastic/deepfreeze.git#subdirectory=packages/deepfreeze-cli
-```
-
-### deepfreeze-server
-
-Persistent background daemon with REST API, background job tracking, SSE push events, and the React/Elastic EUI web interface. Replaces the older `deepfreeze-web` and `deepfreeze-service` packages.
-
-```bash
-pip install -e packages/deepfreeze-server
-deepfreeze-server --config ~/.deepfreeze/config.yml
-```
-
-[View deepfreeze-server documentation](packages/deepfreeze-server/README.md)
-
 ## Supported Cloud Providers
-
-Deepfreeze supports multiple cloud storage providers:
 
 | Provider | Storage Type | Archive Tier |
 |----------|--------------|--------------|
@@ -58,15 +29,61 @@ Deepfreeze supports multiple cloud storage providers:
 - **Refreeze**: Return thawed data to archive storage
 - **Cleanup**: Remove expired thaw requests and associated resources
 - **Repair Metadata**: Fix inconsistencies in the deepfreeze status index
+- **Audit Logging**: All mutating actions recorded to Elasticsearch
+- **Web UI**: React/Elastic EUI dashboard with scheduler management
+- **Remote Mode**: CLI can operate against a running deepfreeze-server
+
+## Installation
+
+### Quick Install
+
+The interactive installer handles packages, frontend build, config scaffolding, and optional systemd setup:
+
+```bash
+git clone https://github.com/elastic/deepfreeze.git
+cd deepfreeze
+./install.sh
+```
+
+Installer options:
+
+| Flag | Description |
+|------|-------------|
+| `--cli-only` | Install CLI + core only (no server or Web UI) |
+| `--dev` | Development mode (editable pip installs) |
+| `--uninstall` | Remove deepfreeze packages |
+
+### Manual Install
+
+```bash
+# Core + CLI only
+pip install packages/deepfreeze-core
+pip install packages/deepfreeze-cli
+
+# Full stack (includes server + Web UI)
+pip install packages/deepfreeze-core
+pip install packages/deepfreeze-cli
+pip install packages/deepfreeze-server
+```
+
+### Provider extras
+
+```bash
+# Azure support
+pip install packages/deepfreeze-core[azure]
+
+# GCP support
+pip install packages/deepfreeze-core[gcp]
+
+# All providers
+pip install packages/deepfreeze-core[azure,gcp]
+```
 
 ## Quick Start
 
-1. Install the CLI:
-   ```bash
-   pip install git+https://github.com/elastic/deepfreeze.git#subdirectory=packages/deepfreeze-cli
-   ```
+1. **Install** (see above) or run `./install.sh` which scaffolds config interactively.
 
-2. Create a configuration file (`config.yml`):
+2. **Create a configuration file** (`~/.deepfreeze/config.yml`):
    ```yaml
    elasticsearch:
      hosts:
@@ -92,19 +109,20 @@ Deepfreeze supports multiple cloud storage providers:
        credentials_file: /path/to/service-account.json
    ```
 
-3. Initialize deepfreeze:
+3. **Initialize deepfreeze**:
    ```bash
-   deepfreeze setup --config config.yml
+   deepfreeze setup --config ~/.deepfreeze/config.yml
    ```
 
-4. Check status:
+4. **Check status**:
    ```bash
-   deepfreeze status --config config.yml
+   deepfreeze status --config ~/.deepfreeze/config.yml
    ```
 
-## Integration with Curator
-
-Elasticsearch Curator can use deepfreeze-core as a dependency. See the [Curator documentation](https://github.com/wortmanb/curator) for integration details.
+5. **Start the server** (optional):
+   ```bash
+   deepfreeze-server --config ~/.deepfreeze/config.yml
+   ```
 
 ## Development
 
@@ -115,7 +133,10 @@ Elasticsearch Curator can use deepfreeze-core as a dependency. See the [Curator 
 git clone https://github.com/elastic/deepfreeze.git
 cd deepfreeze
 
-# Install packages in development mode
+# Install all packages in development mode
+./install.sh --dev
+
+# Or manually
 pip install -e packages/deepfreeze-core[dev]
 pip install -e packages/deepfreeze-cli[dev]
 pip install -e packages/deepfreeze-server[dev]
@@ -132,6 +153,7 @@ deepfreeze/
 │   ├── deepfreeze-core/       # Core domain logic library
 │   ├── deepfreeze-cli/        # Standalone CLI (local + remote)
 │   └── deepfreeze-server/     # Persistent daemon (REST + SSE + Web UI)
+├── install.sh                 # Interactive installer
 ├── tests/
 └── .github/workflows/
 ```

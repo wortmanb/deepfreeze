@@ -4,7 +4,7 @@ Standalone Elasticsearch cloud storage archival and lifecycle management tool.
 
 ## Overview
 
-Deepfreeze provides cost-effective cloud storage archival and lifecycle management for Elasticsearch snapshot repositories without requiring full Curator installation. It is a lightweight, focused tool for managing long-term data retention in cloud archive storage.
+Deepfreeze provides cost-effective cloud storage archival and lifecycle management for Elasticsearch snapshot repositories. It is a lightweight, focused tool for managing long-term data retention in cloud archive storage.
 
 ## Supported Cloud Providers
 
@@ -36,14 +36,15 @@ pip install deepfreeze-cli
 
 ```bash
 # Clone the repository
-git clone https://github.com/wortmanb/curator.git
-cd curator/deepfreeze
+git clone https://github.com/elastic/deepfreeze.git
+cd deepfreeze
 
 # Install in development mode
-pip install -e .
+pip install -e packages/deepfreeze-core
+pip install -e packages/deepfreeze-cli
 
-# Or install with development dependencies
-pip install -e ".[dev]"
+# Or use the interactive installer
+./install.sh --dev --cli-only
 ```
 
 ### Verify Installation
@@ -325,15 +326,6 @@ pytest tests/test_actions.py
 - Tests use mocked Elasticsearch and S3 clients
 - No live Elasticsearch or AWS connection required
 - All tests run in isolation
-
-## Independence from Curator
-
-Deepfreeze is a standalone package that operates independently of Elasticsearch Curator. It:
-
-- Has no imports from the curator package
-- Uses its own Elasticsearch client wrapper (not es_client.builder)
-- Maintains its own exception classes
-- Can be installed and run without curator
 
 ## License
 
