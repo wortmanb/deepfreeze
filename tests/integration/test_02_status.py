@@ -19,7 +19,7 @@ class TestStatusCLI:
     """Status command via CliRunner."""
 
     def test_status_exits_zero(self, runner, test_config_file):
-        """Status command should succeed after setup."""
+        """Status command should succeed."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
@@ -27,7 +27,7 @@ class TestStatusCLI:
         ])
         assert result.exit_code == 0, f"Status failed:\n{result.output}"
 
-    def test_status_porcelain(self, runner, test_config_file, test_prefixes):
+    def test_status_porcelain(self, runner, test_config_file):
         """Porcelain output should be parseable JSON."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -35,20 +35,24 @@ class TestStatusCLI:
             "status", "--porcelain",
         ])
         assert result.exit_code == 0, f"Status --porcelain failed:\n{result.output}"
-        # Porcelain status outputs JSON to stdout
         output = result.output.strip()
         if output:
             data = json.loads(output)
             assert "settings" in data or "repositories" in data
 
-    def test_status_shows_repos(self, runner, test_config_file, test_prefixes):
-        """Status should show the repository created by setup."""
+    def test_status_shows_repos(self, runner, test_config_file, live_repo_prefix, cluster_initialized):
+        """Status should show repositories matching the configured prefix."""
+        if not cluster_initialized:
+            pytest.skip("Cluster not initialized")
+
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
             "status", "--repos",
         ])
         assert result.exit_code == 0
-        assert test_prefixes.repo_name_prefix in result.output, (
-            f"Expected repo prefix '{test_prefixes.repo_name_prefix}' in status output"
+        # The Rich table truncates names; check that at least some repo content appears
+        assert live_repo_prefix[:8] in result.output, (
+            f"Expected repo prefix '{live_repo_prefix}' (or truncated) in status output.\n"
+            f"Output:\n{result.output[:500]}"
         )

@@ -23,6 +23,8 @@ import yaml
 
 from deepfreeze_core.esclient import create_es_client
 
+from deepfreeze_core.constants import STATUS_INDEX
+
 from .helpers.diagnostics import write_failure_diagnostics
 from .helpers.waiter import wait_for_server_ready
 
@@ -149,6 +151,33 @@ def test_config_file(integration_config, test_prefixes):
 # ---------------------------------------------------------------------------
 # Index template fixture — creates a minimal template for setup to reference
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def cluster_initialized(es_client):
+    """Whether deepfreeze is already initialized on this cluster."""
+    return es_client.indices.exists(index=STATUS_INDEX)
+
+
+@pytest.fixture(scope="session")
+def live_settings(es_client, cluster_initialized):
+    """The actual deepfreeze settings from the cluster, or None."""
+    if not cluster_initialized:
+        return None
+    try:
+        from deepfreeze_core.constants import SETTINGS_ID
+        doc = es_client.get(index=STATUS_INDEX, id=SETTINGS_ID)
+        return doc["_source"]
+    except Exception:
+        return None
+
+
+@pytest.fixture(scope="session")
+def live_repo_prefix(live_settings):
+    """The repo_name_prefix from the live cluster settings."""
+    if live_settings:
+        return live_settings.get("repo_name_prefix", "deepfreeze")
+    return None
+
 
 @pytest.fixture(scope="session")
 def test_index_template(es_client, test_prefixes):
