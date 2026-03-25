@@ -397,10 +397,12 @@ export default function Scheduler() {
     {
       name: 'Actions',
       width: '130px',
-      render: (job: ScheduledJob) => (
-        <EuiFlexGroup gutterSize="s" alignItems="center" responsive={false}>
-          <EuiFlexItem grow={false}>
-            {job.persisted ? (
+      actions: [
+        {
+          name: 'Edit',
+          description: 'Edit job',
+          render: (job: ScheduledJob) =>
+            job.persisted ? (
               <EuiToolTip content="Edit">
                 <EuiButtonIcon
                   iconType="pencil"
@@ -418,9 +420,12 @@ export default function Scheduler() {
                   isDisabled
                 />
               </EuiToolTip>
-            )}
-          </EuiFlexItem>
-          <EuiFlexItem grow={false}>
+            ),
+        },
+        {
+          name: 'Toggle',
+          description: 'Pause or resume',
+          render: (job: ScheduledJob) => (
             <EuiToolTip content={job.paused ? 'Resume' : 'Pause'}>
               <EuiButtonIcon
                 iconType={job.paused ? 'playFilled' : 'pause'}
@@ -429,9 +434,13 @@ export default function Scheduler() {
                 onClick={() => handleTogglePause(job)}
               />
             </EuiToolTip>
-          </EuiFlexItem>
-          <EuiFlexItem grow={false}>
-            {job.persisted ? (
+          ),
+        },
+        {
+          name: 'Delete',
+          description: 'Remove job',
+          render: (job: ScheduledJob) =>
+            job.persisted ? (
               <EuiToolTip content="Remove">
                 <EuiButtonIcon
                   iconType="trash"
@@ -449,10 +458,9 @@ export default function Scheduler() {
                   isDisabled
                 />
               </EuiToolTip>
-            )}
-          </EuiFlexItem>
-        </EuiFlexGroup>
-      ),
+            ),
+        },
+      ],
     },
   ];
 
