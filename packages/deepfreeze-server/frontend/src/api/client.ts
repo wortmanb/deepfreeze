@@ -16,16 +16,93 @@ function detectApiBase(): string {
 
 const API_BASE = detectApiBase();
 
+// -- Auth token management --
+
+let _authToken: string | null = sessionStorage.getItem('deepfreeze-auth-token');
+let _onAuthError: (() => void) | null = null;
+
+export function setAuthToken(token: string | null) {
+  _authToken = token;
+  if (token) {
+    sessionStorage.setItem('deepfreeze-auth-token', token);
+  } else {
+    sessionStorage.removeItem('deepfreeze-auth-token');
+  }
+}
+
+export function getAuthToken(): string | null {
+  return _authToken;
+}
+
+export function onAuthError(cb: () => void) {
+  _onAuthError = cb;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+  if (_authToken) {
+    headers['Authorization'] = `Bearer ${_authToken}`;
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    _onAuthError?.();
+    throw new Error('Session expired');
+  }
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(error.detail || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// -- Auth endpoints --
+
+export interface LoginResponse {
+  token: string;
+  username: string;
+  expires_in: number;
+}
+
+export interface UserInfo {
+  username: string;
+  authenticated: boolean;
+}
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(error.detail || 'Login failed');
+  }
+  const data: LoginResponse = await res.json();
+  setAuthToken(data.token);
+  return data;
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await request('/auth/logout', { method: 'POST' });
+  } catch {
+    // ignore — we're logging out regardless
+  }
+  setAuthToken(null);
+}
+
+export async function checkSession(): Promise<UserInfo | null> {
+  if (!_authToken) return null;
+  try {
+    return await request<UserInfo>('/auth/me');
+  } catch {
+    setAuthToken(null);
+    return null;
+  }
 }
 
 // -- Status endpoints --
