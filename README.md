@@ -83,7 +83,7 @@ pip install packages/deepfreeze-core[azure,gcp]
 
 1. **Install** (see above) or run `./install.sh` which scaffolds config interactively.
 
-2. **Create a configuration file** (`~/.deepfreeze/config.yml`):
+2. **Create or update a configuration file** (`~/.deepfreeze/config.yml`):
    ```yaml
    elasticsearch:
      hosts:

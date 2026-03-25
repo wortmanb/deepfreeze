@@ -347,25 +347,8 @@ def setup(
       - The template will be updated to use the specified ILM policy
       - Ensures new indices will automatically use the deepfreeze ILM policy
     """
-    remote = ctx.obj.get("remote_client")
-    if remote:
-        from deepfreeze.cli.display import display_command_result
-        try:
-            result = remote.setup(
-                repo_name_prefix=repo_name_prefix,
-                bucket_name_prefix=bucket_name_prefix,
-                ilm_policy_name=ilm_policy_name,
-                index_template_name=index_template_name,
-                dry_run=ctx.obj["dry_run"],
-            )
-            display_command_result(result, porcelain=porcelain)
-            if not result.get("success", False):
-                ctx.exit(1)
-        except Exception as e:
-            click.echo(f"Error: {e}", err=True)
-            ctx.exit(1)
-        return
-
+    # Setup always runs in local mode — it needs direct ES access to create
+    # the status index, register repositories, and configure ILM policies.
     from deepfreeze_core.actions import Setup
 
     client = get_client_from_context(ctx)
