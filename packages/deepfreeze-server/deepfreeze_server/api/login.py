@@ -103,7 +103,14 @@ async def login(body: LoginRequest, request: Request):
     try:
         client = create_es_client(**es_kwargs)
         info = client.security.authenticate()
-        es_username = info.get("username", identity_label)
+        # Prefer full_name or email over the raw username (which may be
+        # an opaque ID for SAML/OIDC users).
+        es_username = (
+            info.get("full_name")
+            or info.get("email")
+            or info.get("username")
+            or identity_label
+        )
         client.close()
     except Exception as e:
         logger.info("Login failed for '%s': %s", identity_label, e)
