@@ -198,8 +198,7 @@ function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
   );
 }
 
-function AppShell({ colorMode, onToggleColorMode, username, onLogout }: {
-  colorMode: ColorMode;
+function AppShell({ onToggleColorMode, username, onLogout }: {
   onToggleColorMode: () => void;
   username: string;
   onLogout: () => void;
@@ -433,7 +432,6 @@ export default function App() {
       {username ? (
         <BrowserRouter>
           <AppShell
-            colorMode={colorMode}
             onToggleColorMode={toggleColorMode}
             username={username}
             onLogout={handleLogout}
