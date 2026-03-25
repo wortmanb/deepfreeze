@@ -44,6 +44,10 @@ deepfreeze-server = "deepfreeze_server.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["deepfreeze_server"]
+artifacts = ["deepfreeze_server/static/**"]
+
+[tool.hatch.build.targets.sdist]
+include = ["deepfreeze_server", "frontend"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

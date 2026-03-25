@@ -99,3 +99,6 @@ Thumbs.db
 deepfreeze-blog-post.md
 examples/config.yml
 deepfreeze.code-workspace
+
+# Built frontend copied into Python package by install.sh
+packages/deepfreeze-server/deepfreeze_server/static/
