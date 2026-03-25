@@ -281,6 +281,34 @@ def configure_logging(config: dict) -> None:
         logging.getLogger("boto3").setLevel(logging.WARNING)
 
 
+def get_server_config(config: dict) -> dict:
+    """Extract deepfreeze-server connection config.
+
+    Returns a dict with 'url' and optionally 'api_token' if configured.
+    Returns empty dict if no server section is present.
+
+    Config file format:
+        server:
+          url: https://deepfreeze.example.com:8000
+          api_token: df_tok_abc123
+
+    Environment overrides:
+        DEEPFREEZE_SERVER_URL, DEEPFREEZE_SERVER_API_TOKEN
+    """
+    server = config.get("server", {})
+    result = {}
+
+    url = os.environ.get("DEEPFREEZE_SERVER_URL", server.get("url"))
+    if url:
+        result["url"] = url.rstrip("/")
+
+    token = os.environ.get("DEEPFREEZE_SERVER_API_TOKEN", server.get("api_token"))
+    if token:
+        result["api_token"] = token
+
+    return result
+
+
 def validate_config(config: dict) -> None:
     """
     Validate that the configuration has required elements.

@@ -18,7 +18,7 @@ from deepfreeze_core import (
 )
 
 from deepfreeze import __version__
-from deepfreeze.config import configure_logging, get_elasticsearch_config, load_config
+from deepfreeze.config import configure_logging, get_elasticsearch_config, get_server_config, load_config
 
 today = datetime.today()
 
@@ -70,8 +70,20 @@ def get_client_from_context(ctx):
     default=False,
     help="Do not perform any changes, only show what would happen",
 )
+@click.option(
+    "--local",
+    is_flag=True,
+    default=False,
+    help="Force local mode (direct ES connection) even if a server URL is configured",
+)
+@click.option(
+    "--server-url",
+    envvar="DEEPFREEZE_SERVER_URL",
+    default=None,
+    help="URL of the deepfreeze-server (overrides config file)",
+)
 @click.pass_context
-def cli(ctx, config_path, dry_run):
+def cli(ctx, config_path, dry_run, local, server_url):
     """
     Deepfreeze - Elasticsearch S3 Glacier archival tool
 
@@ -82,6 +94,13 @@ def cli(ctx, config_path, dry_run):
     Configuration:
       Default config file: ~/.deepfreeze/config.yml
       Override with: --config /path/to/config.yml
+
+    \b
+    Modes:
+      Remote (default when server.url is configured):
+        Commands are sent to a deepfreeze-server over HTTP.
+      Local (--local flag, or no server.url):
+        Commands run directly against Elasticsearch.
 
     \b
     Available commands:
@@ -118,7 +137,23 @@ def cli(ctx, config_path, dry_run):
                 "Using default config: %s", config_path
             )
 
-        # Client will be created lazily when needed
+        # Determine remote vs local mode
+        ctx.obj["remote_client"] = None
+        if not local:
+            server_cfg = get_server_config(config)
+            url = server_url or server_cfg.get("url")
+            if url:
+                from deepfreeze.client import DeepfreezeClient
+
+                ctx.obj["remote_client"] = DeepfreezeClient(
+                    server_url=url,
+                    api_token=server_cfg.get("api_token"),
+                )
+                logging.getLogger("deepfreeze.cli").info(
+                    "Remote mode: %s", url
+                )
+
+        # Client will be created lazily when needed (local mode)
         ctx.obj["client"] = None
 
         # AuditLogger will be created lazily when needed
@@ -312,6 +347,25 @@ def setup(
       - The template will be updated to use the specified ILM policy
       - Ensures new indices will automatically use the deepfreeze ILM policy
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result
+        try:
+            result = remote.setup(
+                repo_name_prefix=repo_name_prefix,
+                bucket_name_prefix=bucket_name_prefix,
+                ilm_policy_name=ilm_policy_name,
+                index_template_name=index_template_name,
+                dry_run=ctx.obj["dry_run"],
+            )
+            display_command_result(result, porcelain=porcelain)
+            if not result.get("success", False):
+                ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import Setup
 
     client = get_client_from_context(ctx)
@@ -422,6 +476,19 @@ def rotate(
     """
     Deepfreeze rotation (add a new repo and age oldest off)
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result
+        try:
+            result = remote.rotate(year=year, month=month, keep=keep, dry_run=ctx.obj["dry_run"])
+            display_command_result(result, porcelain=porcelain)
+            if not result.get("success", False):
+                ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import Rotate
 
     client = get_client_from_context(ctx)
@@ -536,6 +603,17 @@ def status(
     to show specific sections only. Use -t/--time to include full date+time in the
     repository and thaw request tables.
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_status
+        try:
+            data = remote.get_status()
+            display_status(data, porcelain=porcelain)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import Status
 
     client = get_client_from_context(ctx)
@@ -591,6 +669,22 @@ def cleanup(
     """
     Clean up expired thawed repositories
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result
+        try:
+            result = remote.cleanup(
+                refrozen_retention_days=refrozen_retention_days,
+                dry_run=ctx.obj["dry_run"],
+            )
+            display_command_result(result, porcelain=porcelain)
+            if not result.get("success", False):
+                ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import Cleanup
 
     client = get_client_from_context(ctx)
@@ -659,6 +753,22 @@ def refreeze(
 
       deepfreeze refreeze
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result
+        try:
+            result = remote.refreeze(
+                request_id=thaw_request_id,
+                dry_run=ctx.obj["dry_run"],
+            )
+            display_command_result(result, porcelain=porcelain)
+            if not result.get("success", False):
+                ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import Refreeze
 
     client = get_client_from_context(ctx)
@@ -817,8 +927,6 @@ def thaw(
     """
     from datetime import datetime as dt
 
-    from deepfreeze_core.actions import Thaw
-
     # Validate mutual exclusivity
     # check_status is a flag; request_id is the optional argument when -k is used
     modes_active = sum(
@@ -846,6 +954,46 @@ def thaw(
             err=True,
         )
         ctx.exit(1)
+
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result, display_status
+        try:
+            if list_requests:
+                # List mode — fetch thaw requests from status endpoint
+                data = remote.get_status()
+                import json
+                thaw_reqs = data.get("thaw_requests", [])
+                if porcelain:
+                    print(json.dumps(thaw_reqs, indent=2))
+                else:
+                    display_status({"thaw_requests": thaw_reqs}, porcelain=False)
+            elif check_status:
+                # Check status mode
+                request_id_for_check = request_id if request_id else None
+                result = remote.thaw_check(request_id=request_id_for_check)
+                display_command_result(result, porcelain=porcelain)
+                if not result.get("success", False):
+                    ctx.exit(1)
+            else:
+                # Create mode
+                result = remote.thaw_create(
+                    start_date=start_date,
+                    end_date=end_date,
+                    duration=duration,
+                    tier=retrieval_tier,
+                    sync=sync,
+                    dry_run=ctx.obj["dry_run"],
+                )
+                display_command_result(result, porcelain=porcelain)
+                if not result.get("success", False):
+                    ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
+    from deepfreeze_core.actions import Thaw
 
     # Pass request_id to Thaw only when --check-status (-k) is used with an ID
     # check_all is True when --check-status is used without an ID
@@ -918,6 +1066,19 @@ def repair_metadata(ctx, porcelain):
 
     Use --dry-run to see what would be changed without making modifications.
     """
+    remote = ctx.obj.get("remote_client")
+    if remote:
+        from deepfreeze.cli.display import display_command_result
+        try:
+            result = remote.repair_metadata(dry_run=ctx.obj["dry_run"])
+            display_command_result(result, porcelain=porcelain)
+            if not result.get("success", False):
+                ctx.exit(1)
+        except Exception as e:
+            click.echo(f"Error: {e}", err=True)
+            ctx.exit(1)
+        return
+
     from deepfreeze_core.actions import RepairMetadata
 
     client = get_client_from_context(ctx)

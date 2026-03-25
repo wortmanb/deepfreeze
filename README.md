@@ -6,7 +6,11 @@ Deepfreeze enables you to archive Elasticsearch searchable snapshots to S3 Glaci
 
 ## Packages
 
-This repository contains two packages:
+| Package | Description |
+|---------|-------------|
+| [deepfreeze-core](packages/deepfreeze-core/README.md) | Core domain logic library — actions, ES/S3 clients, audit |
+| [deepfreeze-cli](packages/deepfreeze-cli/README.md) | Standalone CLI tool (local or remote via server) |
+| [deepfreeze-server](packages/deepfreeze-server/README.md) | Persistent daemon — REST API, job management, SSE events, Web UI |
 
 ### deepfreeze-core
 
@@ -16,8 +20,6 @@ Core library providing the business logic for deepfreeze operations. Used by bot
 pip install git+https://github.com/elastic/deepfreeze.git#subdirectory=packages/deepfreeze-core
 ```
 
-[View deepfreeze-core documentation](packages/deepfreeze-core/README.md)
-
 ### deepfreeze-cli
 
 Standalone CLI tool for managing Elasticsearch S3 Glacier archives.
@@ -26,7 +28,16 @@ Standalone CLI tool for managing Elasticsearch S3 Glacier archives.
 pip install git+https://github.com/elastic/deepfreeze.git#subdirectory=packages/deepfreeze-cli
 ```
 
-[View deepfreeze-cli documentation](packages/deepfreeze-cli/README.md)
+### deepfreeze-server
+
+Persistent background daemon with REST API, background job tracking, SSE push events, and the React/Elastic EUI web interface. Replaces the older `deepfreeze-web` and `deepfreeze-service` packages.
+
+```bash
+pip install -e packages/deepfreeze-server
+deepfreeze-server --config ~/.deepfreeze/config.yml
+```
+
+[View deepfreeze-server documentation](packages/deepfreeze-server/README.md)
 
 ## Supported Cloud Providers
 
@@ -104,9 +115,10 @@ Elasticsearch Curator can use deepfreeze-core as a dependency. See the [Curator 
 git clone https://github.com/elastic/deepfreeze.git
 cd deepfreeze
 
-# Install both packages in development mode
+# Install packages in development mode
 pip install -e packages/deepfreeze-core[dev]
 pip install -e packages/deepfreeze-cli[dev]
+pip install -e packages/deepfreeze-server[dev]
 
 # Run tests
 pytest tests/
@@ -117,14 +129,11 @@ pytest tests/
 ```
 deepfreeze/
 ├── packages/
-│   ├── deepfreeze-core/     # Core library
-│   │   └── deepfreeze_core/
-│   └── deepfreeze-cli/      # Standalone CLI
-│       └── deepfreeze/
+│   ├── deepfreeze-core/       # Core domain logic library
+│   ├── deepfreeze-cli/        # Standalone CLI (local + remote)
+│   └── deepfreeze-server/     # Persistent daemon (REST + SSE + Web UI)
 ├── tests/
-│   ├── core/                # Core library tests
-│   └── cli/                 # CLI tests
-└── .github/workflows/       # CI/CD
+└── .github/workflows/
 ```
 
 ## License
