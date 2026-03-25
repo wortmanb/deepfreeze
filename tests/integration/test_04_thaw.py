@@ -1,15 +1,9 @@
 """Thaw workflow tests — create thaw requests, check status, verify mounting."""
 
-import json
-import re
-
 import pytest
 from click.testing import CliRunner
 
 from deepfreeze.cli.main import cli
-
-from .helpers.es_verify import get_repos_with_prefix, get_thaw_request
-from .helpers.waiter import wait_for_thaw_status
 
 pytestmark = [pytest.mark.integration, pytest.mark.cli, pytest.mark.slow]
 
@@ -20,18 +14,18 @@ def runner():
 
 
 class TestThawCLI:
-    """Thaw command via CliRunner."""
+    """Thaw command via CliRunner — uses --porcelain for output."""
 
-    def test_thaw_list_empty(self, runner, test_config_file):
+    def test_thaw_list(self, runner, test_config_file):
         """List thaw requests — should work even if no requests exist."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "thaw", "--list",
+            "thaw", "--list", "--porcelain",
         ])
         assert result.exit_code == 0, f"Thaw --list failed:\n{result.output}"
 
-    def test_thaw_create_request(self, runner, test_config_file, es_client, test_prefixes):
+    def test_thaw_create_request(self, runner, test_config_file):
         """Create a thaw request for a broad date range."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -49,7 +43,7 @@ class TestThawCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "thaw", "--check-status",
+            "thaw", "--check-status", "--porcelain",
         ])
         assert result.exit_code == 0, f"Thaw --check-status failed:\n{result.output}"
 
@@ -61,5 +55,6 @@ class TestThawCLI:
             "thaw",
             "--start-date", "2020-01-01T00:00:00Z",
             "--end-date", "2030-12-31T23:59:59Z",
+            "--porcelain",
         ])
         assert result.exit_code == 0, f"Thaw dry-run failed:\n{result.output}\n{result.exception}"

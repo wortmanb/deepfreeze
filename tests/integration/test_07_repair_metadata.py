@@ -14,14 +14,14 @@ def runner():
 
 
 class TestRepairMetadataCLI:
-    """repair-metadata command via CliRunner."""
+    """repair-metadata command via CliRunner — uses --porcelain for output."""
 
     def test_repair_dry_run(self, runner, test_config_file):
         """Repair --dry-run should scan and report without changes."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
-            "repair-metadata",
+            "repair-metadata", "--porcelain",
         ])
         assert result.exit_code == 0, f"Repair dry-run failed:\n{result.output}\n{result.exception}"
 
@@ -30,6 +30,6 @@ class TestRepairMetadataCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "repair-metadata",
+            "repair-metadata", "--porcelain",
         ])
         assert result.exit_code == 0, f"Repair failed:\n{result.output}\n{result.exception}"

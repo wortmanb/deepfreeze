@@ -14,14 +14,14 @@ def runner():
 
 
 class TestCleanupCLI:
-    """Cleanup command via CliRunner."""
+    """Cleanup command via CliRunner — uses --porcelain for output."""
 
     def test_cleanup_dry_run(self, runner, test_config_file):
         """Cleanup --dry-run should exit 0."""
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local", "--dry-run",
-            "cleanup",
+            "cleanup", "--porcelain",
         ])
         assert result.exit_code == 0, f"Cleanup dry-run failed:\n{result.output}\n{result.exception}"
 
@@ -30,6 +30,6 @@ class TestCleanupCLI:
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
-            "cleanup",
+            "cleanup", "--porcelain",
         ])
         assert result.exit_code == 0, f"Cleanup failed:\n{result.output}\n{result.exception}"
