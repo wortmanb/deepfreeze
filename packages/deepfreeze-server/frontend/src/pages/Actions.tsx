@@ -31,16 +31,9 @@ const actionCards: ActionCard[] = [
   {
     id: 'thaw',
     title: 'Thaw',
-    description: 'Create a thaw request to restore frozen indices for a specified date range.',
+    description: 'Thaw data for a given date range by requesting it from storage and mounting it when ready.',
     icon: 'temperature',
     color: 'warning',
-  },
-  {
-    id: 'cleanup',
-    title: 'Cleanup',
-    description: 'Clean up refrozen indices and temporary thaw artifacts that are past retention.',
-    icon: 'broom',
-    color: 'accent',
   },
   {
     id: 'refreeze',
@@ -50,18 +43,25 @@ const actionCards: ActionCard[] = [
     color: 'danger',
   },
   {
+    id: 'rotate',
+    title: 'Rotate',
+    description: 'Rotate snapshot repositories and send the oldest to long-term storage.',
+    icon: 'sortRight',
+    color: 'primary',
+  },
+  {
+    id: 'cleanup',
+    title: 'Cleanup',
+    description: 'Clean up refrozen indices and temporary thaw artifacts that are past retention.',
+    icon: 'broom',
+    color: 'accent',
+  },
+  {
     id: 'repair',
     title: 'Fix / Repair',
     description: 'Detect and repair inconsistencies in snapshot registrations and state tracking.',
     icon: 'wrench',
     color: 'success',
-  },
-  {
-    id: 'rotate',
-    title: 'Rotate',
-    description: 'Rotate indices into snapshot repositories and freeze them according to the configured schedule.',
-    icon: 'sortRight',
-    color: 'primary',
   },
 ];
 
