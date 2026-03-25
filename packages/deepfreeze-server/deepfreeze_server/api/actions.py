@@ -36,7 +36,7 @@ async def _submit_or_wait(
     if not wait:
         return JSONResponse(
             status_code=202,
-            content=submission.model_dump(),
+            content=submission.model_dump(mode="json"),
         )
 
     job = await orch.job_manager.wait_for_job(submission.job_id, timeout=timeout)
@@ -46,11 +46,11 @@ async def _submit_or_wait(
     if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
         # Return the CommandResult directly for backward compat with Web UI
         if job.result:
-            return JSONResponse(content=job.result.model_dump())
-        return JSONResponse(content=job.model_dump())
+            return JSONResponse(content=job.result.model_dump(mode="json"))
+        return JSONResponse(content=job.model_dump(mode="json"))
 
     # Job still running after timeout — return 202 with current state
-    return JSONResponse(status_code=202, content=job.model_dump())
+    return JSONResponse(status_code=202, content=job.model_dump(mode="json"))
 
 
 @router.post("/actions/rotate")
