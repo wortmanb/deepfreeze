@@ -24,7 +24,24 @@ import Actions from './pages/Actions';
 import Activity from './pages/Activity';
 import Scheduler from './pages/Scheduler';
 
-function AppShell() {
+type ColorMode = 'light' | 'dark';
+
+function useColorMode(): [ColorMode, () => void] {
+  const [colorMode, setColorMode] = useState<ColorMode>(() => {
+    const saved = localStorage.getItem('deepfreeze-color-mode');
+    return saved === 'light' ? 'light' : 'dark';
+  });
+  const toggle = useCallback(() => {
+    setColorMode((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('deepfreeze-color-mode', next);
+      return next;
+    });
+  }, []);
+  return [colorMode, toggle];
+}
+
+function AppShell({ colorMode, onToggleColorMode }: { colorMode: ColorMode; onToggleColorMode: () => void }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [isSideNavOpenOnMobile, setIsSideNavOpenOnMobile] = useState(false);
@@ -132,6 +149,16 @@ function AppShell() {
         <EuiHeaderSection side="right">
           <EuiHeaderSectionItem>
             <EuiButtonIcon
+              iconType={colorMode === 'dark' ? 'sun' : 'moon'}
+              aria-label="Toggle light/dark mode"
+              color="text"
+              display="empty"
+              size="s"
+              onClick={onToggleColorMode}
+            />
+          </EuiHeaderSectionItem>
+          <EuiHeaderSectionItem>
+            <EuiButtonIcon
               iconType="gear"
               aria-label="Configuration"
               color="text"
@@ -196,10 +223,11 @@ function AppShell() {
 }
 
 export default function App() {
+  const [colorMode, toggleColorMode] = useColorMode();
   return (
-    <EuiProvider colorMode="dark">
+    <EuiProvider colorMode={colorMode}>
       <BrowserRouter>
-        <AppShell />
+        <AppShell colorMode={colorMode} onToggleColorMode={toggleColorMode} />
       </BrowserRouter>
     </EuiProvider>
   );
