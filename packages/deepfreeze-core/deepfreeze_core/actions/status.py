@@ -4,9 +4,7 @@
 
 import json
 import logging
-import sys
 import threading
-import time
 
 from elasticsearch8 import Elasticsearch
 from rich.console import Console

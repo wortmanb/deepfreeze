@@ -11,9 +11,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..models.commands import CommandResult
-from ..models.errors import ServiceError, map_exception_to_error
+from ..models.errors import map_exception_to_error
 from ..models.events import Event, EventChannel, EventType
-from ..models.jobs import Job, JobProgress, JobStatus, JobSubmission
+from ..models.jobs import Job, JobStatus, JobSubmission
 from .event_bus import EventBus
 
 logger = logging.getLogger("deepfreeze.server.jobs")

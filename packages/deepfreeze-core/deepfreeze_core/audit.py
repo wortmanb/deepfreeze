@@ -8,20 +8,16 @@ This module provides:
 - ActionTracker: Helper class for accumulating results during action execution
 """
 
-import json
 import logging
 import socket
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 from elasticsearch8 import Elasticsearch
 
-from deepfreeze_core.constants import STATUS_INDEX
-
-# Index for audit records
-AUDIT_INDEX = "deepfreeze-audit"
+from deepfreeze_core.constants import AUDIT_INDEX
 
 
 @dataclass
@@ -232,7 +228,7 @@ class AuditLogger:
             # This might be available in some ES client versions
             if hasattr(self.client, "_username"):
                 return self.client._username
-        except:
+        except AttributeError:
             pass
 
         # Fallback to environment
@@ -244,7 +240,7 @@ class AuditLogger:
         """Get the current hostname."""
         try:
             return socket.gethostname()
-        except:
+        except OSError:
             return "unknown"
 
     def log_action(
