@@ -228,14 +228,27 @@ echo ""
 
 # -- systemd setup --
 if ! $CLI_ONLY && [[ -d /etc/systemd/system ]]; then
-  ask "Install systemd service for deepfreeze-server? [y/N]:"
-  read -r INSTALL_SYSTEMD
-  if [[ "${INSTALL_SYSTEMD,,}" == "y" ]]; then
-    DEEPFREEZE_SERVER_BIN=$(command -v deepfreeze-server 2>/dev/null || echo "$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')/deepfreeze-server")
-    CURRENT_USER=$(whoami)
+  UNIT_FILE="/etc/systemd/system/deepfreeze-server.service"
 
-    UNIT_FILE="/etc/systemd/system/deepfreeze-server.service"
-    sudo tee "$UNIT_FILE" > /dev/null << EOF
+  if systemctl is-active --quiet deepfreeze-server 2>/dev/null; then
+    # Service is already running — offer to restart it
+    ok "deepfreeze-server service is running"
+    ask "Restart deepfreeze-server to pick up changes? [y/N]:"
+    read -r RESTART_SERVICE
+    if [[ "${RESTART_SERVICE,,}" == "y" ]]; then
+      sudo systemctl restart deepfreeze-server
+      ok "deepfreeze-server restarted"
+      echo ""
+      echo "  View logs:    journalctl -u deepfreeze-server -f"
+    fi
+  else
+    ask "Install systemd service for deepfreeze-server? [y/N]:"
+    read -r INSTALL_SYSTEMD
+    if [[ "${INSTALL_SYSTEMD,,}" == "y" ]]; then
+      DEEPFREEZE_SERVER_BIN=$(command -v deepfreeze-server 2>/dev/null || echo "$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')/deepfreeze-server")
+      CURRENT_USER=$(whoami)
+
+      sudo tee "$UNIT_FILE" > /dev/null << EOF
 [Unit]
 Description=Deepfreeze Server
 After=network.target elasticsearch.service
@@ -261,19 +274,20 @@ ReadWritePaths=${CONFIG_DIR}
 WantedBy=multi-user.target
 EOF
 
-    sudo systemctl daemon-reload
-    ok "systemd unit installed: ${UNIT_FILE}"
+      sudo systemctl daemon-reload
+      ok "systemd unit installed: ${UNIT_FILE}"
 
-    ask "Enable and start deepfreeze-server now? [y/N]:"
-    read -r START_NOW
-    if [[ "${START_NOW,,}" == "y" ]]; then
-      sudo systemctl enable deepfreeze-server
-      sudo systemctl start deepfreeze-server
-      ok "deepfreeze-server is running"
-      echo ""
-      echo "  View logs:    journalctl -u deepfreeze-server -f"
-      echo "  Stop:         sudo systemctl stop deepfreeze-server"
-      echo "  Restart:      sudo systemctl restart deepfreeze-server"
+      ask "Enable and start deepfreeze-server now? [y/N]:"
+      read -r START_NOW
+      if [[ "${START_NOW,,}" == "y" ]]; then
+        sudo systemctl enable deepfreeze-server
+        sudo systemctl start deepfreeze-server
+        ok "deepfreeze-server is running"
+        echo ""
+        echo "  View logs:    journalctl -u deepfreeze-server -f"
+        echo "  Stop:         sudo systemctl stop deepfreeze-server"
+        echo "  Restart:      sudo systemctl restart deepfreeze-server"
+      fi
     fi
   fi
 fi
