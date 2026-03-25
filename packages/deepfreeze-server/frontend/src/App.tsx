@@ -22,6 +22,7 @@ import Repositories from './pages/Repositories';
 import ThawRequests from './pages/ThawRequests';
 import Actions from './pages/Actions';
 import Activity from './pages/Activity';
+import Scheduler from './pages/Scheduler';
 
 function AppShell() {
   const navigate = useNavigate();
@@ -100,6 +101,13 @@ function AppShell() {
           onClick: () => navigate('/actions'),
         },
         {
+          name: 'Scheduler',
+          id: 'scheduler',
+          icon: <EuiIcon type="calendar" />,
+          isSelected: location.pathname === '/scheduler',
+          onClick: () => navigate('/scheduler'),
+        },
+        {
           name: 'Activity',
           id: 'activity',
           icon: <EuiIcon type="clock" />,
@@ -157,6 +165,7 @@ function AppShell() {
             <Route path="/repositories" element={<Repositories />} />
             <Route path="/thaw-requests" element={<ThawRequests />} />
             <Route path="/actions" element={<Actions />} />
+            <Route path="/scheduler" element={<Scheduler />} />
             <Route path="/activity" element={<Activity />} />
           </Routes>
         </EuiPageTemplate.Section>

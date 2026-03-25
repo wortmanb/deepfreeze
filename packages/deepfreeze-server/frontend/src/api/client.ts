@@ -96,6 +96,24 @@ export interface AuditEntry {
   version: string;
 }
 
+export interface ScheduledJob {
+  name: string;
+  action: string;
+  params: Record<string, unknown>;
+  cron: string | null;
+  interval_seconds: number | null;
+  paused: boolean;
+  next_run: string | null;
+}
+
+export interface AddScheduledJobRequest {
+  name: string;
+  action: string;
+  params?: Record<string, unknown>;
+  cron?: string;
+  interval_seconds?: number;
+}
+
 export const api = {
   // Status
   getStatus: (forceRefresh = false) =>
@@ -166,5 +184,30 @@ export const api = {
     request<CommandResult>('/actions/repair', {
       method: 'POST',
       body: JSON.stringify(params),
+    }),
+
+  // Scheduler
+  getScheduledJobs: () =>
+    request<{ jobs: ScheduledJob[] }>('/scheduler/jobs'),
+
+  addScheduledJob: (job: AddScheduledJobRequest) =>
+    request<{ name: string; status: string }>('/scheduler/jobs', {
+      method: 'POST',
+      body: JSON.stringify(job),
+    }),
+
+  removeScheduledJob: (name: string) =>
+    request<{ name: string; status: string }>(`/scheduler/jobs/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
+
+  pauseScheduledJob: (name: string) =>
+    request<{ name: string; status: string }>(`/scheduler/jobs/${encodeURIComponent(name)}/pause`, {
+      method: 'POST',
+    }),
+
+  resumeScheduledJob: (name: string) =>
+    request<{ name: string; status: string }>(`/scheduler/jobs/${encodeURIComponent(name)}/resume`, {
+      method: 'POST',
     }),
 };
