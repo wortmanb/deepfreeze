@@ -51,8 +51,7 @@ function useColorMode(): [ColorMode, () => void] {
   return [colorMode, toggle];
 }
 
-function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
-  colorMode: ColorMode;
+function LoginPage({ onToggleColorMode, onLogin }: {
   onToggleColorMode: () => void;
   onLogin: (username: string) => void;
 }) {
@@ -439,7 +438,6 @@ export default function App() {
         </BrowserRouter>
       ) : (
         <LoginPage
-          colorMode={colorMode}
           onToggleColorMode={toggleColorMode}
           onLogin={setUsername}
         />
