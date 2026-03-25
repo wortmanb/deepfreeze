@@ -101,7 +101,7 @@ def get_repos_with_prefix(es: Elasticsearch, prefix: str) -> list[dict]:
             index=STATUS_INDEX,
             body={
                 "query": {"bool": {"must": [
-                    {"prefix": {"name": prefix}},
+                    {"prefix": {"name.keyword": prefix}},
                     {"exists": {"field": "bucket"}},  # repos have a bucket field
                 ]}},
                 "size": 100,
@@ -118,7 +118,7 @@ def get_repo_thaw_state(es: Elasticsearch, repo_name: str) -> Optional[str]:
     try:
         result = es.search(
             index=STATUS_INDEX,
-            body={"query": {"term": {"name": repo_name}}, "size": 1},
+            body={"query": {"term": {"name.keyword": repo_name}}, "size": 1},
         )
         hits = result.get("hits", {}).get("hits", [])
         if hits:
@@ -173,7 +173,7 @@ def snapshot_es_state(es: Elasticsearch, prefix: str) -> dict:
         if es.indices.exists(index=STATUS_INDEX):
             result = es.search(
                 index=STATUS_INDEX,
-                body={"query": {"prefix": {"name": prefix}}, "size": 50},
+                body={"query": {"prefix": {"name.keyword": prefix}}, "size": 50},
             )
             state["status_docs"] = [hit["_source"] for hit in result["hits"]["hits"]]
     except Exception:
