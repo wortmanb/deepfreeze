@@ -1,5 +1,6 @@
 """FastAPI application factory for the deepfreeze server."""
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,10 +20,50 @@ from .orchestration.orchestrator import DeepfreezeOrchestrator
 _API_PREFIXES = ("/api", "/health", "/ready", "/docs", "/openapi.json", "/redoc")
 
 
+# Map config YAML keys → environment variables for storage providers.
+# Core actions call s3_client_factory(provider) with no kwargs; the provider
+# clients fall back to these env vars for credential discovery.
+_STORAGE_ENV_MAP = {
+    "aws": {
+        "region": "AWS_DEFAULT_REGION",
+        "profile": "AWS_PROFILE",
+        "access_key_id": "AWS_ACCESS_KEY_ID",
+        "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+    },
+    "azure": {
+        "connection_string": "AZURE_STORAGE_CONNECTION_STRING",
+        "account_name": "AZURE_STORAGE_ACCOUNT",
+        "account_key": "AZURE_STORAGE_KEY",
+    },
+    "gcp": {
+        "project": "GCLOUD_PROJECT",
+        "credentials_file": "GOOGLE_APPLICATION_CREDENTIALS",
+    },
+}
+
+
+def _export_storage_credentials(raw_config: dict) -> None:
+    """Set environment variables from the storage section of the config.
+
+    Only sets variables that aren't already in the environment, so explicit
+    env vars always take precedence over config-file values.
+    """
+    storage = raw_config.get("storage", {})
+    if not storage:
+        return
+    for provider, mappings in _STORAGE_ENV_MAP.items():
+        provider_cfg = storage.get(provider, {})
+        for config_key, env_var in mappings.items():
+            value = provider_cfg.get(config_key)
+            if value and env_var not in os.environ:
+                os.environ[env_var] = str(value)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize orchestrator on startup, clean up on shutdown."""
     raw_config: dict = app.state.raw_config
+    _export_storage_credentials(raw_config)
     es_config = get_elasticsearch_config(raw_config)
     client = create_es_client(**es_config)
 
