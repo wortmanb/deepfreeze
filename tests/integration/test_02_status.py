@@ -51,8 +51,9 @@ class TestStatusCLI:
             "status", "--repos",
         ])
         assert result.exit_code == 0
-        # The Rich table truncates names; check that at least some repo content appears
-        assert live_repo_prefix[:8] in result.output, (
+        # Rich tables truncate names (e.g., "deepfre…"), so check a short prefix
+        # or use porcelain mode for exact matching
+        assert live_repo_prefix[:6] in result.output, (
             f"Expected repo prefix '{live_repo_prefix}' (or truncated) in status output.\n"
             f"Output:\n{result.output[:500]}"
         )
