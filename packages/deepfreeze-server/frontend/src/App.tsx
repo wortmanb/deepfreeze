@@ -88,7 +88,7 @@ function LoginPage({ colorMode, onToggleColorMode, onLogin }: {
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
       <div style={{ position: 'absolute', top: 16, right: 16 }}>
         <EuiButtonIcon
-          iconType={colorMode === 'dark' ? 'sun' : 'moon'}
+          iconType="invert"
           aria-label="Toggle light/dark mode"
           color="text"
           display="empty"
@@ -316,7 +316,7 @@ function AppShell({ colorMode, onToggleColorMode, username, onLogout }: {
           </EuiHeaderSectionItem>
           <EuiHeaderSectionItem>
             <EuiButtonIcon
-              iconType={colorMode === 'dark' ? 'sun' : 'moon'}
+              iconType="invert"
               aria-label="Toggle light/dark mode"
               color="text"
               display="empty"
