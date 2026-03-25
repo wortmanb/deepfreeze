@@ -89,8 +89,14 @@ def assert_settings_exist(es: Elasticsearch) -> dict:
 
 
 def get_repos_with_prefix(es: Elasticsearch, prefix: str) -> list[dict]:
-    """Query deepfreeze-status for repository docs matching *prefix*."""
+    """Query deepfreeze-status for repository docs matching *prefix*.
+
+    Refreshes the index first to ensure recently-indexed docs are visible.
+    """
     try:
+        # Ensure recently written docs are searchable
+        es.indices.refresh(index=STATUS_INDEX)
+
         result = es.search(
             index=STATUS_INDEX,
             body={
