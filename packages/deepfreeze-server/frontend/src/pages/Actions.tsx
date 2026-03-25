@@ -45,7 +45,7 @@ const actionCards: ActionCard[] = [
   {
     id: 'rotate',
     title: 'Rotate',
-    description: 'Rotate snapshot repositories, set a new ILM policy to point to the new repo, and send the oldest to long-term storage.',
+    description: 'Rotate snapshot repositories, set a new ILM policy for the new repo, and send the oldest to long-term storage.',
     icon: 'sortRight',
     color: 'primary',
   },
