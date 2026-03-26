@@ -168,13 +168,16 @@ class Setup:
 
         if matching_repos:
             repo_list = "\n  ".join([f"[cyan]{repo}[/cyan]" for repo in matching_repos])
+            delete_cmds = "\n  ".join(
+                [f"[yellow]curl -X DELETE 'https://<host>:9200/_snapshot/{repo}'[/yellow]" for repo in matching_repos]
+            )
             errors.append(
                 {
                     "issue": f"Found {len(matching_repos)} existing repositor{'y' if len(matching_repos) == 1 else 'ies'} matching prefix [cyan]{self.settings.repo_name_prefix}[/cyan]:\n  {repo_list}",
                     "solution": "Delete the existing repositories before running setup:\n"
-                    "  [yellow]deepfreeze cleanup[/yellow]\n"
-                    "  or manually delete each repository:\n"
-                    "  [yellow]curl -X DELETE 'http://<host>:9200/_snapshot/<repo_name>'[/yellow]\n"
+                    f"  {delete_cmds}\n\n"
+                    "Or via Kibana Dev Tools:\n"
+                    f"  [yellow]DELETE /_snapshot/{self.settings.repo_name_prefix}-*[/yellow]\n"
                     "\n[bold]WARNING:[/bold] Ensure you have backups before deleting repositories!",
                 }
             )
