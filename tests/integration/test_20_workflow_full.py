@@ -295,9 +295,18 @@ class TestFullLifecycle:
 
     def test_06_rotate(self, runner, test_config_file, es_client, test_prefixes):
         """Rotate to create a new repository and archive old ones."""
+        repos_before = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+        count_before = len(repos_before)
+
         _invoke(runner, test_config_file, "rotate", "--keep", "1")
-        assert_repo_exists(es_client, f"{test_prefixes.repo_name_prefix}-000002")
-        logger.info("Rotation complete")
+
+        repos_after = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+        assert len(repos_after) == count_before + 1, (
+            f"Expected {count_before + 1} repos, got {len(repos_after)}. "
+            f"Before: {[r['name'] for r in repos_before]}  "
+            f"After: {[r['name'] for r in repos_after]}"
+        )
+        logger.info("Rotation complete: %d -> %d repos", count_before, len(repos_after))
 
     def test_07_verify_repo_states(self, es_client, test_prefixes):
         """Verify repo state distribution after rotate."""
