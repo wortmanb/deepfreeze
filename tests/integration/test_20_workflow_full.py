@@ -245,6 +245,31 @@ class TestFullLifecycle:
         )
         logger.info("Rollover detected: %d backing indices", _backing_count())
 
+    def test_04b_set_repo_date_range(self, es_client, test_prefixes):
+        """Set the date range on the initial repo while indices are still mounted.
+
+        This must happen BEFORE the frozen/delete phases remove the indices,
+        because update_repository_date_range scans mounted indices to
+        determine the date range. Without this, thaw can't find the repo
+        by date range.
+        """
+        from deepfreeze_core.utilities import get_all_repos, update_repository_date_range
+
+        repos = get_all_repos(es_client)
+        updated = 0
+        for repo in repos:
+            if repo.name.startswith(test_prefixes.repo_name_prefix):
+                if update_repository_date_range(es_client, repo):
+                    logger.info("Set date range for %s: %s - %s", repo.name, repo.start, repo.end)
+                    updated += 1
+                else:
+                    logger.warning("Could not determine date range for %s", repo.name)
+
+        assert updated >= 1, (
+            f"Failed to set date range on any repo. "
+            f"Repos: {[r.name for r in repos if r.name.startswith(test_prefixes.repo_name_prefix)]}"
+        )
+
     def test_05_wait_for_frozen_phase(self, es_client, test_prefixes):
         """Wait for at least one backing index to reach the frozen ILM phase."""
         ds_name = test_prefixes.data_stream_name
@@ -419,9 +444,24 @@ class TestFullLifecycle:
         logger.info("Status: %d repos, %d thaw requests",
                      len(repos), len(data.get("thaw_requests", [])))
 
-    def test_10_thaw_create(self, runner, test_config_file):
+    def test_10_thaw_create(self, runner, test_config_file, es_client, test_prefixes):
         """Create a thaw request (async — returns immediately)."""
-        logger.info("Creating thaw request...")
+        # Verify we have frozen repos with date ranges before thawing
+        repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+        frozen_with_dates = [
+            r for r in repos
+            if r.get("thaw_state") == THAW_STATE_FROZEN and r.get("start") and r.get("end")
+        ]
+        logger.info(
+            "Repos before thaw: %s",
+            {r["name"]: {"state": r.get("thaw_state"), "start": r.get("start"), "end": r.get("end")} for r in repos},
+        )
+        assert len(frozen_with_dates) >= 1, (
+            f"No frozen repos with date ranges found — thaw would find nothing. "
+            f"Repos: {[(r['name'], r.get('thaw_state'), r.get('start'), r.get('end')) for r in repos]}"
+        )
+
+        logger.info("Creating thaw request for frozen repos with date ranges...")
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
@@ -431,8 +471,18 @@ class TestFullLifecycle:
             "--async",
             "--porcelain",
         ])
+        logger.info("Thaw create output: %s", result.output.strip()[:500])
         assert result.exit_code == 0, f"Thaw create failed:\n{result.output}\n{result.exception}"
-        logger.info("Thaw request created")
+
+        # Verify a thaw request was actually created
+        from deepfreeze_core.utilities import list_thaw_requests
+        es_client.indices.refresh(index=STATUS_INDEX)
+        requests = list_thaw_requests(es_client)
+        assert len(requests) >= 1, (
+            f"Thaw command succeeded but no thaw request was created in the status index. "
+            f"Output: {result.output.strip()[:200]}"
+        )
+        logger.info("Thaw request created: %d request(s) in status index", len(requests))
 
     def test_10b_wait_for_thaw_complete(self, runner, test_config_file, es_client, test_prefixes):
         """Poll thaw --check-status until the thaw request is completed.
