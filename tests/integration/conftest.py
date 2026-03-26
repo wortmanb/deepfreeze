@@ -360,6 +360,28 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
 
 
 # ---------------------------------------------------------------------------
+# Timestamp each test in verbose output
+# ---------------------------------------------------------------------------
+
+def pytest_runtest_call(item):
+    """Print a timestamp when each test starts."""
+    from datetime import datetime
+    ts = datetime.now().strftime("%H:%M:%S")
+    item.config._timestamp_prefix = ts
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_logreport(report):
+    """Prepend timestamp to the test result line."""
+    from datetime import datetime
+    if report.when == "call":
+        ts = datetime.now().strftime("%H:%M:%S")
+        # Inject timestamp into the nodeid for display
+        report.nodeid = f"[{ts}] {report.nodeid}"
+    yield
+
+
+# ---------------------------------------------------------------------------
 # Failure diagnostics hook
 # ---------------------------------------------------------------------------
 
