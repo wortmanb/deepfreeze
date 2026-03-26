@@ -290,7 +290,7 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
     except Exception:
         pass
 
-    # 4. Delete cloud storage buckets
+    # 4. Delete cloud storage buckets (force=True to empty before deleting)
     try:
         from deepfreeze_core.s3client import s3_client_factory
 
@@ -298,7 +298,7 @@ def auto_cleanup(es_client, test_prefixes, storage_provider):
         buckets = s3.list_buckets(prefix=prefix)
         for bucket_name in buckets:
             try:
-                s3.delete_bucket(bucket_name)
+                s3.delete_bucket(bucket_name, force=True)
                 logger.info("Deleted bucket: %s", bucket_name)
             except Exception as exc:
                 logger.warning("Failed to delete bucket '%s': %s", bucket_name, exc)
