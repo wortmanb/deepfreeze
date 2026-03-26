@@ -290,6 +290,59 @@ class TestFullLifecycle:
         )
         logger.info("At least one backing index reached frozen phase")
 
+    def test_05b_wait_for_delete_phase(self, es_client, test_prefixes):
+        """Wait for the oldest backing index to be deleted by ILM.
+
+        After the frozen phase creates a searchable snapshot, the delete
+        phase removes the index (but preserves the snapshot in the repo).
+        Only after deletion can rotate unmount and archive the repo.
+        """
+        ds_name = test_prefixes.data_stream_name
+
+        # Get the first (oldest) backing index name
+        ds = es_client.indices.get_data_stream(name=ds_name)
+        streams = ds.get("data_streams", [])
+        assert streams, f"Data stream '{ds_name}' not found"
+        backing = [idx["index_name"] for idx in streams[0].get("indices", [])]
+        assert len(backing) >= 2, f"Expected 2+ backing indices, got {len(backing)}"
+
+        # The oldest backing index is the one that will be deleted
+        oldest_index = backing[0]
+        logger.info("Waiting for ILM to delete oldest index '%s' (timeout: 45m)...", oldest_index)
+
+        def _deleted():
+            return not es_client.indices.exists(index=oldest_index)
+
+        def _diag():
+            try:
+                # Check all backing indices' ILM state
+                current_ds = es_client.indices.get_data_stream(name=ds_name)
+                current_streams = current_ds.get("data_streams", [])
+                if not current_streams:
+                    return "Data stream gone"
+                current_backing = [idx["index_name"] for idx in current_streams[0].get("indices", [])]
+                ilm = _get_ilm_explain(es_client, ",".join(current_backing)) if current_backing else {}
+                exists = es_client.indices.exists(index=oldest_index)
+                return json.dumps({
+                    "oldest_index": oldest_index,
+                    "still_exists": bool(exists),
+                    "current_backing": current_backing,
+                    "ilm": {k: {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
+                            for k, v in ilm.items()},
+                }, indent=2)
+            except Exception as e:
+                return f"diagnostic error: {e}"
+
+        wait_for(
+            _deleted,
+            timeout=2700,  # 45 minutes — delete phase is at 30m min_age
+            initial_interval=15,
+            max_interval=30,
+            description=f"ILM delete of '{oldest_index}'",
+            on_timeout=_diag,
+        )
+        logger.info("Index '%s' deleted by ILM — snapshot preserved in repo", oldest_index)
+
     def test_06_rotate(self, runner, test_config_file, es_client, test_prefixes):
         """Rotate to create a new repository and archive old ones to glacier."""
         repos_before = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
