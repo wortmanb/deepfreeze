@@ -127,7 +127,7 @@ class TestRepositoryOperations:
     def test_get_repository_returns_repository_when_found(self):
         """Test get_repository returns Repository when found in status index"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.utilities import get_repository
+        from elastic_deepfreeze_core.utilities import get_repository
 
         mock_client = MagicMock()
         mock_client.search.return_value = {
@@ -156,7 +156,7 @@ class TestRepositoryOperations:
     def test_get_repository_returns_empty_when_not_found(self):
         """Test get_repository returns new Repository when not found"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.utilities import get_repository
+        from elastic_deepfreeze_core.utilities import get_repository
 
         mock_client = MagicMock()
         mock_client.search.return_value = {"hits": {"total": {"value": 0}, "hits": []}}
@@ -409,7 +409,7 @@ class TestThawRequestOperations:
 
     def test_update_thaw_request(self):
         """Test update_thaw_request updates status"""
-        from elastic_elastic_deepfreeze_core.utilities import update_thaw_request
+        from elastic_deepfreeze_core.utilities import update_thaw_request
 
         mock_client = MagicMock()
 
@@ -428,7 +428,7 @@ class TestNoCuratorImports:
         """Test that utilities.py has no curator imports (actual import statements, not docstrings)"""
         import inspect
 
-        import elastic_elastic_deepfreeze_core.utilities as util_module
+        import elastic_deepfreeze_core.utilities as util_module
 
         source = inspect.getsource(util_module)
 
@@ -455,7 +455,7 @@ class TestAllUtilityFunctionsAccessible:
 
     def test_repository_functions_exist(self):
         """Test repository operation functions are importable"""
-        from elastic_elastic_deepfreeze_core.utilities import (
+        from elastic_deepfreeze_core.utilities import (
             create_repo,
             get_all_repos,
             get_matching_repo_names,
@@ -499,7 +499,7 @@ class TestAllUtilityFunctionsAccessible:
 
     def test_ilm_functions_exist(self):
         """Test ILM operation functions are importable"""
-        from elastic_elastic_deepfreeze_core.utilities import (
+        from elastic_deepfreeze_core.utilities import (
             create_ilm_policy,
             create_or_update_ilm_policy,
             create_thawed_ilm_policy,
@@ -513,7 +513,7 @@ class TestAllUtilityFunctionsAccessible:
 
     def test_thaw_functions_exist(self):
         """Test thaw operation functions are importable"""
-        from elastic_elastic_deepfreeze_core.utilities import (
+        from elastic_deepfreeze_core.utilities import (
             get_thaw_request,
             list_thaw_requests,
             save_thaw_request,
@@ -537,7 +537,7 @@ class TestAllUtilityFunctionsAccessible:
 
     def test_index_functions_exist(self):
         """Test index operation functions are importable"""
-        from elastic_elastic_deepfreeze_core.utilities import (
+        from elastic_deepfreeze_core.utilities import (
             find_and_mount_indices_in_date_range,
             find_snapshots_for_index,
             get_all_indices_in_repo,

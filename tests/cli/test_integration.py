@@ -19,7 +19,7 @@ from elastic_deepfreeze import (
     Setup,
     Thaw,
 )
-from elastic_elastic_deepfreeze_core.constants import THAW_STATUS_COMPLETED
+from elastic_deepfreeze_core.constants import THAW_STATUS_COMPLETED
 
 
 class MockElasticsearchClient:
@@ -414,7 +414,7 @@ class TestBackwardCompatibility:
         }
 
         # Verify we can read the settings
-        from elastic_elastic_deepfreeze_core.utilities import get_settings
+        from elastic_deepfreeze_core.utilities import get_settings
 
         settings = get_settings(mock_es)
 
@@ -449,7 +449,7 @@ class TestBackwardCompatibility:
         }
 
         # Verify we can read the repository
-        from elastic_elastic_deepfreeze_core.utilities import get_repository
+        from elastic_deepfreeze_core.utilities import get_repository
 
         repo = get_repository(mock_es, "legacy-repo-000001")
 
@@ -477,7 +477,7 @@ class TestBackwardCompatibility:
         }
 
         # Verify we can read the thaw request
-        from elastic_elastic_deepfreeze_core.utilities import get_thaw_request
+        from elastic_deepfreeze_core.utilities import get_thaw_request
 
         request = get_thaw_request(mock_es, "thaw-legacy-001")
 

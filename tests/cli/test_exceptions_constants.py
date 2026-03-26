@@ -60,7 +60,7 @@ def test_exception_instantiation():
 
 def test_constants_importable():
     """Test that all constants can be imported from elastic_deepfreeze.constants"""
-    from elastic_elastic_deepfreeze_core.constants import (
+    from elastic_deepfreeze_core.constants import (
         PROVIDERS,
         SETTINGS_ID,
         STATUS_INDEX,

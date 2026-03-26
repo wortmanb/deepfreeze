@@ -80,8 +80,8 @@ class TestPackageImportsStandalone:
         assert issubclass(ActionError, DeepfreezeException)
 
     def test_import_deepfreeze_constants(self):
-        """Test that constants can be imported from elastic_elastic_deepfreeze_core.constants"""
-        from elastic_elastic_deepfreeze_core.constants import (
+        """Test that constants can be imported from elastic_deepfreeze_core.constants"""
+        from elastic_deepfreeze_core.constants import (
             PROVIDERS,
             SETTINGS_ID,
             STATUS_INDEX,

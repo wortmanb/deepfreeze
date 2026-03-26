@@ -24,7 +24,7 @@ import pytest
 class TestAwsS3ClientInstantiation:
     """Tests for AwsS3Client instantiation"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_client_instantiation_success(self, mock_boto3):
         """Test that AwsS3Client can be instantiated with valid credentials"""
         from elastic_deepfreeze import AwsS3Client
@@ -41,7 +41,7 @@ class TestAwsS3ClientInstantiation:
         mock_boto3.client.assert_called_once_with("s3")
         mock_client.list_buckets.assert_called_once()
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_client_instantiation_invalid_credentials(self, mock_boto3):
         """Test that AwsS3Client raises ActionError for invalid credentials"""
         from botocore.exceptions import ClientError
@@ -66,7 +66,7 @@ class TestAwsS3ClientInstantiation:
 class TestBucketExists:
     """Tests for bucket_exists method"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_bucket_exists_true(self, mock_boto3):
         """Test bucket_exists returns True when bucket exists"""
         from elastic_deepfreeze import AwsS3Client
@@ -82,7 +82,7 @@ class TestBucketExists:
         assert result is True
         mock_client.head_bucket.assert_called_once_with(Bucket="test-bucket")
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_bucket_exists_false(self, mock_boto3):
         """Test bucket_exists returns False when bucket does not exist"""
         from botocore.exceptions import ClientError
@@ -103,7 +103,7 @@ class TestBucketExists:
 class TestListObjects:
     """Tests for list_objects method"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_list_objects_empty(self, mock_boto3):
         """Test list_objects returns empty list when no objects"""
         from elastic_deepfreeze import AwsS3Client
@@ -122,7 +122,7 @@ class TestListObjects:
 
         assert result == []
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_list_objects_with_results(self, mock_boto3):
         """Test list_objects returns objects when they exist"""
         from elastic_deepfreeze import AwsS3Client
@@ -151,7 +151,7 @@ class TestListObjects:
 class TestS3ClientFactory:
     """Tests for s3_client_factory function"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_factory_returns_aws_client(self, mock_boto3):
         """Test factory returns AwsS3Client for 'aws' provider"""
         from elastic_deepfreeze import AwsS3Client, s3_client_factory
@@ -195,7 +195,7 @@ class TestS3ClientFactory:
 class TestS3ClientOperations:
     """Tests for various S3Client operations"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_test_connection_success(self, mock_boto3):
         """Test test_connection returns True when connection succeeds"""
         from elastic_deepfreeze import AwsS3Client
@@ -209,7 +209,7 @@ class TestS3ClientOperations:
 
         assert result is True
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_test_connection_failure(self, mock_boto3):
         """Test test_connection returns False when connection fails"""
         from botocore.exceptions import ClientError
@@ -237,7 +237,7 @@ class TestS3ClientOperations:
 class TestBucketOperations:
     """Tests for bucket create and delete operations (Task Group 17)"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_create_bucket_success(self, mock_boto3):
         """Test create_bucket creates bucket successfully"""
         from elastic_deepfreeze import AwsS3Client
@@ -262,7 +262,7 @@ class TestBucketOperations:
 
         mock_client.create_bucket.assert_called_once_with(Bucket="new-bucket")
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_create_bucket_already_exists(self, mock_boto3):
         """Test create_bucket raises error when bucket exists"""
         from elastic_deepfreeze import ActionError, AwsS3Client
@@ -279,7 +279,7 @@ class TestBucketOperations:
 
         assert "already exists" in str(exc_info.value)
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_delete_bucket_success(self, mock_boto3):
         """Test delete_bucket deletes bucket successfully"""
         from elastic_deepfreeze import AwsS3Client
@@ -293,7 +293,7 @@ class TestBucketOperations:
 
         mock_client.delete_bucket.assert_called_once_with(Bucket="delete-me-bucket")
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_delete_bucket_force(self, mock_boto3):
         """Test delete_bucket with force=True empties bucket first"""
         from elastic_deepfreeze import AwsS3Client
@@ -318,7 +318,7 @@ class TestBucketOperations:
 class TestObjectOperations:
     """Tests for object put, head, and copy operations (Task Group 17)"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_put_object_success(self, mock_boto3):
         """Test put_object successfully puts object"""
         from elastic_deepfreeze import AwsS3Client
@@ -334,7 +334,7 @@ class TestObjectOperations:
             Bucket="test-bucket", Key="test-key", Body="test-body"
         )
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_head_object_success(self, mock_boto3):
         """Test head_object returns metadata"""
         from elastic_deepfreeze import AwsS3Client
@@ -357,7 +357,7 @@ class TestObjectOperations:
             Bucket="test-bucket", Key="test-key"
         )
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_copy_object_success(self, mock_boto3):
         """Test copy_object copies with storage class"""
         from elastic_deepfreeze import AwsS3Client
@@ -381,7 +381,7 @@ class TestObjectOperations:
             StorageClass="GLACIER",
         )
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_list_buckets_with_prefix(self, mock_boto3):
         """Test list_buckets filters by prefix"""
         from elastic_deepfreeze import AwsS3Client
@@ -408,7 +408,7 @@ class TestObjectOperations:
 class TestThawRefreezeOperations:
     """Tests for thaw and refreeze operations (Task Group 17)"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_thaw_initiates_restore_for_glacier_objects(self, mock_boto3):
         """Test thaw initiates restore for Glacier storage class objects"""
         from elastic_deepfreeze import AwsS3Client
@@ -436,7 +436,7 @@ class TestThawRefreezeOperations:
         # Should have called restore_object twice (only for GLACIER and DEEP_ARCHIVE)
         assert mock_client.restore_object.call_count == 2
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_thaw_skips_objects_outside_base_path(self, mock_boto3):
         """Test thaw skips objects that don't start with base_path"""
         from elastic_deepfreeze import AwsS3Client
@@ -463,7 +463,7 @@ class TestThawRefreezeOperations:
         # Should have called restore_object only once
         assert mock_client.restore_object.call_count == 1
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_refreeze_copies_objects_to_glacier(self, mock_boto3):
         """Test refreeze copies objects to GLACIER storage class"""
         from elastic_deepfreeze import AwsS3Client
@@ -493,7 +493,7 @@ class TestThawRefreezeOperations:
 class TestS3ClientErrorHandling:
     """Tests for error handling in S3 operations (Task Group 17)"""
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_head_object_raises_action_error(self, mock_boto3):
         """Test head_object raises ActionError on failure"""
         from botocore.exceptions import ClientError
@@ -513,7 +513,7 @@ class TestS3ClientErrorHandling:
 
         assert "Error getting metadata" in str(exc_info.value)
 
-    @patch("elastic_elastic_deepfreeze_core.s3client.boto3")
+    @patch("elastic_deepfreeze_core.s3client.boto3")
     def test_bucket_exists_raises_on_unexpected_error(self, mock_boto3):
         """Test bucket_exists raises ActionError on unexpected errors"""
         from botocore.exceptions import ClientError

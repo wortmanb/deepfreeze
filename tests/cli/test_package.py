@@ -25,9 +25,9 @@ def test_submodules_import_successfully():
     import elastic_deepfreeze.cli
     import elastic_deepfreeze.config
     import elastic_deepfreeze.validators
-    import elastic_elastic_deepfreeze_core.actions
-    import elastic_elastic_deepfreeze_core.constants
-    import elastic_elastic_deepfreeze_core.exceptions
+    import elastic_deepfreeze_core.actions
+    import elastic_deepfreeze_core.constants
+    import elastic_deepfreeze_core.exceptions
 
     assert elastic_deepfreeze_core.exceptions is not None
     assert elastic_deepfreeze_core.constants is not None

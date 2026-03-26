@@ -96,7 +96,7 @@ class TestRepositoryStateTransitions:
     def test_start_thawing_transition(self):
         """Test Repository.start_thawing() sets correct state"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.constants import THAW_STATE_THAWING
+        from elastic_deepfreeze_core.constants import THAW_STATE_THAWING
 
         repo = Repository(name="thaw-test", thaw_state="frozen")
         expires_at = datetime(2024, 1, 15, tzinfo=timezone.utc)
@@ -110,7 +110,7 @@ class TestRepositoryStateTransitions:
     def test_mark_thawed_transition(self):
         """Test Repository.mark_thawed() sets correct state"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.constants import THAW_STATE_THAWED
+        from elastic_deepfreeze_core.constants import THAW_STATE_THAWED
 
         repo = Repository(name="mark-thawed-test", thaw_state="thawing")
 
@@ -125,7 +125,7 @@ class TestRepositoryStateTransitions:
     def test_mark_expired_transition(self):
         """Test Repository.mark_expired() sets correct state"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.constants import THAW_STATE_EXPIRED
+        from elastic_deepfreeze_core.constants import THAW_STATE_EXPIRED
 
         repo = Repository(name="expire-test", thaw_state="thawed")
         repo.thawed_at = datetime(2023, 12, 1, tzinfo=timezone.utc)
@@ -139,7 +139,7 @@ class TestRepositoryStateTransitions:
     def test_reset_to_frozen_transition(self):
         """Test Repository.reset_to_frozen() clears all thaw state"""
         from elastic_deepfreeze import Repository
-        from elastic_elastic_deepfreeze_core.constants import THAW_STATE_FROZEN
+        from elastic_deepfreeze_core.constants import THAW_STATE_FROZEN
 
         repo = Repository(
             name="reset-test",

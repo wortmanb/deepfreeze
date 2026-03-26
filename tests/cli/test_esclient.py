@@ -19,7 +19,7 @@ import pytest
 class TestCreateEsClient:
     """Tests for create_es_client function"""
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_create_with_username_password(self, mock_es_class):
         """Test creating client with username/password authentication"""
         from elastic_deepfreeze import create_es_client
@@ -45,7 +45,7 @@ class TestCreateEsClient:
         assert call_kwargs["basic_auth"] == ("elastic", "changeme")
         mock_client.cluster.health.assert_called_once()
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_create_with_api_key(self, mock_es_class):
         """Test creating client with API key authentication"""
         from elastic_deepfreeze import create_es_client
@@ -66,7 +66,7 @@ class TestCreateEsClient:
         call_kwargs = mock_es_class.call_args[1]
         assert call_kwargs["api_key"] == "base64-encoded-key"
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_create_with_cloud_id(self, mock_es_class):
         """Test creating client with Elastic Cloud ID"""
         from elastic_deepfreeze import create_es_client
@@ -87,7 +87,7 @@ class TestCreateEsClient:
         call_kwargs = mock_es_class.call_args[1]
         assert call_kwargs["cloud_id"] == "deployment:base64string"
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_create_with_certificates(self, mock_es_class):
         """Test creating client with SSL certificates"""
         from elastic_deepfreeze import create_es_client
@@ -125,7 +125,7 @@ class TestCreateEsClient:
 class TestConnectionValidation:
     """Tests for connection validation"""
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_connection_validation_success(self, mock_es_class):
         """Test that connection validation calls cluster health"""
         from elastic_deepfreeze import create_es_client
@@ -145,7 +145,7 @@ class TestConnectionValidation:
 
         mock_client.cluster.health.assert_called_with(timeout="5s")
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_authentication_failure(self, mock_es_class):
         """Test that authentication failure raises ActionError"""
         from elastic_deepfreeze import ActionError, create_es_client
@@ -176,7 +176,7 @@ class TestConnectionValidation:
                 password="credentials",
             )
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_generic_exception_raises_action_error(self, mock_es_class):
         """Test that generic exceptions are converted to ActionError"""
         from elastic_deepfreeze import ActionError, create_es_client
@@ -254,7 +254,7 @@ logging:
         finally:
             os.unlink(config_path)
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_create_client_from_config(self, mock_es_class):
         """Test creating client directly from config file"""
         from elastic_deepfreeze import create_es_client_from_config
@@ -316,7 +316,7 @@ class TestValidateConnection:
 class TestESClientWrapper:
     """Tests for ESClientWrapper class"""
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_wrapper_init_with_params(self, mock_es_class):
         """Test ESClientWrapper initialization with direct parameters"""
         from elastic_deepfreeze import ESClientWrapper
@@ -343,7 +343,7 @@ class TestESClientWrapper:
         assert wrapper.cluster_status == "green"
         assert wrapper.version == "8.11.0"
 
-    @patch("elastic_elastic_deepfreeze_core.esclient.Elasticsearch")
+    @patch("elastic_deepfreeze_core.esclient.Elasticsearch")
     def test_wrapper_is_healthy(self, mock_es_class):
         """Test ESClientWrapper.is_healthy() method"""
         from elastic_deepfreeze import ESClientWrapper
