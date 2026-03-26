@@ -66,8 +66,8 @@ class TestPackageImportsStandalone:
         """Test that import deepfreeze works"""
         import elastic_deepfreeze
 
-        assert deepfreeze is not None
-        assert hasattr(deepfreeze, "__version__")
+        assert elastic_deepfreeze is not None
+        assert hasattr(elastic_deepfreeze, "__version__")
 
     def test_import_deepfreeze_exceptions(self):
         """Test that exception classes can be imported from deepfreeze"""
@@ -179,7 +179,7 @@ class TestCLIFunctionality:
         result = runner.invoke(cli, ["--version"])
 
         assert result.exit_code == 0
-        assert "elastic_deepfreeze" in result.output.lower()
+        assert "deepfreeze" in result.output.lower()
 
     def test_cli_setup_help(self):
         """Test deepfreeze setup --help works"""
@@ -355,7 +355,7 @@ class TestBinaryBuildConfiguration:
         """Verify package has version defined"""
         import elastic_deepfreeze
 
-        assert hasattr(deepfreeze, "__version__")
+        assert hasattr(elastic_deepfreeze, "__version__")
         assert elastic_deepfreeze.__version__ is not None
         assert len(elastic_deepfreeze.__version__) > 0
 

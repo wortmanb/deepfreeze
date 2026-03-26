@@ -15,8 +15,8 @@ def test_package_imports_successfully():
     """Test that the deepfreeze package can be imported"""
     import elastic_deepfreeze
 
-    assert deepfreeze is not None
-    assert hasattr(deepfreeze, "__version__")
+    assert elastic_deepfreeze is not None
+    assert hasattr(elastic_deepfreeze, "__version__")
     assert len(elastic_deepfreeze.__version__) > 0  # Version should be a non-empty string
 
 
