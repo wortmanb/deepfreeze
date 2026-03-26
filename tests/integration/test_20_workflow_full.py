@@ -419,36 +419,76 @@ class TestFullLifecycle:
         logger.info("Status: %d repos, %d thaw requests",
                      len(repos), len(data.get("thaw_requests", [])))
 
-    def test_10_thaw(self, runner, test_config_file, es_client, test_prefixes):
-        """Create a thaw request and wait for completion.
-
-        This should take minutes (or hours for Glacier Deep Archive)
-        because objects need to be restored from archive storage.
-        """
-        logger.info("Starting thaw (sync mode — will wait for glacier restore)...")
-        start = time.monotonic()
-
+    def test_10_thaw_create(self, runner, test_config_file):
+        """Create a thaw request (async — returns immediately)."""
+        logger.info("Creating thaw request...")
         result = runner.invoke(cli, [
             "--config", test_config_file,
             "--local",
             "thaw",
             "--start-date", "2020-01-01T00:00:00Z",
             "--end-date", "2030-12-31T23:59:59Z",
-            "--sync",
+            "--async",
             "--porcelain",
         ])
-        assert result.exit_code == 0, f"Thaw failed:\n{result.output}\n{result.exception}"
+        assert result.exit_code == 0, f"Thaw create failed:\n{result.output}\n{result.exception}"
+        logger.info("Thaw request created")
+
+    def test_10b_wait_for_thaw_complete(self, runner, test_config_file, es_client, test_prefixes):
+        """Poll thaw --check-status until the thaw request is completed.
+
+        This is the real wait — glacier restores take minutes (Standard)
+        to hours (Bulk/Deep Archive). We poll every 30 seconds.
+        """
+        start = time.monotonic()
+
+        def _thaw_completed():
+            """Run thaw --check-status and check if all requests are completed."""
+            result = runner.invoke(cli, [
+                "--config", test_config_file,
+                "--local",
+                "thaw", "--check-status",
+                "--porcelain",
+            ])
+            if result.exit_code != 0:
+                logger.debug("check-status exit code %d: %s", result.exit_code, result.output[:200])
+                return False
+
+            # Check repo states — thaw is done when repos are thawed (not thawing)
+            repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+            thawing = [r for r in repos if r.get("thaw_state") == THAW_STATE_THAWING]
+            thawed = [r for r in repos if r.get("thaw_state") == THAW_STATE_THAWED]
+
+            if thawing:
+                elapsed = time.monotonic() - start
+                logger.info(
+                    "Thaw in progress (%.0fs): %d thawing, %d thawed",
+                    elapsed, len(thawing), len(thawed),
+                )
+                return False
+
+            if thawed:
+                return True
+
+            return False
+
+        def _diag():
+            repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+            states = {r["name"]: r.get("thaw_state") for r in repos}
+            return json.dumps({"repo_states": states}, indent=2)
+
+        logger.info("Waiting for thaw to complete (glacier restore — timeout: 2h)...")
+        wait_for(
+            _thaw_completed,
+            timeout=7200,  # 2 hours — glacier Standard retrieval can take 3-5 hours
+            initial_interval=30,
+            max_interval=60,
+            description="thaw completion (glacier restore)",
+            on_timeout=_diag,
+        )
 
         elapsed = time.monotonic() - start
-        logger.info("Thaw completed in %.1f seconds", elapsed)
-
-        # If thaw completed in under 30 seconds, something is wrong —
-        # real glacier restores take minutes at minimum
-        if elapsed < 30:
-            logger.warning(
-                "Thaw completed suspiciously fast (%.1fs) — "
-                "objects may not have actually been in archive storage", elapsed
-            )
+        logger.info("Thaw completed in %.1f seconds (%.1f minutes)", elapsed, elapsed / 60)
 
     def test_11_verify_thawed_repos(self, es_client, test_prefixes):
         """After thaw, previously frozen repos should be in thawed state."""
