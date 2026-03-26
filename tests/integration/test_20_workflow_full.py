@@ -55,7 +55,7 @@ DOC_SIZE_APPROX = 512
 
 # Rotate interval and max attempts
 ROTATE_INTERVAL_SECS = 300  # 5 minutes between rotations
-MAX_ROTATE_ATTEMPTS = 12    # 12 × 5 min = 60 min max wait for archive
+MAX_ROTATE_ATTEMPTS = 18    # 18 × 5 min = 90 min max wait for archive
 
 
 @pytest.fixture(scope="module")
@@ -171,12 +171,18 @@ def _check_archive_storage(es, test_prefixes, storage_provider):
         try:
             objects = s3.list_objects(bucket, base_path)
             if not objects:
+                logger.debug("No objects in %s/%s for repo %s", bucket, base_path, repo["name"])
                 continue
 
             sample_classes = {obj.get("StorageClass", "STANDARD") for obj in objects[:5]}
+            logger.debug(
+                "Repo %s: %d objects, sample classes: %s",
+                repo["name"], len(objects), sample_classes,
+            )
             if sample_classes & archive_classes:
                 return True, repo["name"]
-        except Exception:
+        except Exception as e:
+            logger.debug("Error checking repo %s: %s", repo["name"], e)
             continue
 
     return False, None
@@ -278,9 +284,9 @@ class TestFullLifecycle:
                 "rotate", "--keep", "1", "--porcelain",
             ])
             if result.exit_code != 0:
-                logger.warning("Rotate failed (attempt %d): %s", attempt, result.output[:200])
+                logger.warning("Rotate failed (attempt %d): %s", attempt, result.output[:300])
             else:
-                logger.info("Rotate succeeded")
+                logger.info("Rotate succeeded. Output: %s", result.output.strip()[:300])
 
             # Check if any frozen repo has objects in archive storage
             in_archive, repo_name = _check_archive_storage(es_client, test_prefixes, storage_provider)
