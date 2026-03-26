@@ -12,8 +12,8 @@ from pathlib import Path
 import click
 from elastic_deepfreeze_core import ActionError, DeepfreezeException, create_es_client
 
-from deepfreeze import __version__
-from deepfreeze.config import (
+from elastic_deepfreeze import __version__
+from elastic_deepfreeze.config import (
     configure_logging,
     get_elasticsearch_config,
     load_config,
