@@ -191,18 +191,37 @@ class TestFullLifecycle:
         frozen_age = policy["policy"]["phases"]["frozen"]["min_age"]
         assert frozen_age == ILM_FROZEN_AGE, f"Expected frozen min_age={ILM_FROZEN_AGE}, got {frozen_age}"
 
-    def test_03_load_data(self, es_client, test_prefixes):
-        """Load test documents into the data stream."""
-        ds_name = test_prefixes.data_stream_name
-        success = _load_test_data(es_client, ds_name, NUM_TEST_DOCS)
-        assert success >= NUM_TEST_DOCS * 0.9, f"Only {success}/{NUM_TEST_DOCS} docs indexed"
+    def test_03_start_data_loader(self, es_loader, es_client, test_prefixes):
+        """Start the background data loader and verify data is flowing.
 
-        ds = es_client.indices.get_data_stream(name=ds_name)
+        The es-loader runs continuously at ~10 docs/sec throughout the
+        test session, ensuring there's always fresh timestamped data
+        for ILM to process.
+        """
+        if es_loader is None:
+            # Fallback: load a batch manually if es-loader isn't available
+            logger.warning("es-loader not available — loading data manually")
+            ds_name = test_prefixes.data_stream_name
+            success = _load_test_data(es_client, ds_name, NUM_TEST_DOCS)
+            assert success >= NUM_TEST_DOCS * 0.9, f"Only {success}/{NUM_TEST_DOCS} docs indexed"
+        else:
+            # Wait a few seconds for the loader to push some initial data
+            ds_name = test_prefixes.data_stream_name
+            logger.info("Waiting for es-loader to push initial data to '%s'...", ds_name)
+            wait_for(
+                lambda: es_client.indices.exists(index=ds_name),
+                timeout=30,
+                initial_interval=2,
+                max_interval=5,
+                description=f"data stream '{ds_name}' to be created by es-loader",
+            )
+
+        # Verify data stream exists and has docs
+        ds = es_client.indices.get_data_stream(name=test_prefixes.data_stream_name)
         streams = ds.get("data_streams", [])
         assert len(streams) == 1, f"Data stream not created: {ds}"
         backing = streams[0].get("indices", [])
-        logger.info("Data stream '%s' created with %d backing index(es), %d docs loaded",
-                     ds_name, len(backing), success)
+        logger.info("Data stream '%s' has %d backing index(es)", test_prefixes.data_stream_name, len(backing))
 
     def test_04_wait_for_rollover(self, es_client, test_prefixes):
         """Wait for ILM to rollover the hot index (should happen after ~3 minutes)."""

@@ -185,6 +185,87 @@ def test_index_template(es_client, test_prefixes):
 
 
 # ---------------------------------------------------------------------------
+# Background data loader (es-loader) — runs throughout the test session
+# ---------------------------------------------------------------------------
+
+ES_LOADER_PATH = Path(__file__).parent.parent.parent.parent / "deepfreeze-testing" / "es-loader" / "es-loader.py"
+
+
+@pytest.fixture(scope="session")
+def es_loader(integration_config, test_prefixes):
+    """Start es-loader as a background process pushing data to the test data stream.
+
+    Runs continuously at ~10 docs/sec throughout the test session, ensuring
+    there's always fresh timestamped data flowing through ILM. Killed at teardown.
+
+    Requires ~/git/deepfreeze-testing/es-loader/es-loader.py to exist.
+    """
+    if not ES_LOADER_PATH.is_file():
+        logger.warning("es-loader not found at %s — skipping background data load", ES_LOADER_PATH)
+        yield None
+        return
+
+    # Build an es-loader config file with the test cluster creds and data stream name
+    es_section = integration_config.get("elasticsearch", {})
+    loader_config = {
+        "elasticsearch": {
+            "hosts": es_section.get("hosts", []),
+            "verify_certs": es_section.get("verify_certs", False),
+            "ssl_show_warn": False,
+            "timeout": 30,
+            "max_retries": 3,
+            "retry_on_timeout": True,
+        },
+        "index": {
+            "name": test_prefixes.data_stream_name,
+            "is_datastream": True,
+        },
+        "document": {"size": 512},
+        "indexing": {"rate": 10, "bulk_size": 50, "num_docs": 0},
+        "logging": {"level": "WARNING", "progress_interval": 60},
+    }
+
+    # Copy auth from the integration config
+    if "api_key" in es_section:
+        loader_config["elasticsearch"]["api_key"] = es_section["api_key"]
+    elif "username" in es_section:
+        loader_config["elasticsearch"]["auth"] = {
+            "username": es_section["username"],
+            "password": es_section.get("password", ""),
+        }
+    if "cloud_id" in es_section:
+        loader_config["elasticsearch"]["cloud_id"] = es_section["cloud_id"]
+
+    fd, config_path = tempfile.mkstemp(suffix=".yml", prefix="dftest-loader-")
+    with os.fdopen(fd, "w") as f:
+        yaml.safe_dump(loader_config, f)
+
+    logger.info("Starting es-loader: %s -> %s (10 docs/sec)", ES_LOADER_PATH, test_prefixes.data_stream_name)
+    proc = subprocess.Popen(
+        ["python3", str(ES_LOADER_PATH), "-c", config_path, "-r", "10"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    logger.info("es-loader started (pid=%d)", proc.pid)
+
+    yield proc
+
+    # Teardown: kill the loader
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    logger.info("es-loader stopped")
+
+    try:
+        os.unlink(config_path)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Server process fixture (for API and WebUI tests)
 # ---------------------------------------------------------------------------
 
