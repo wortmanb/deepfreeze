@@ -47,16 +47,16 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 logger = logging.getLogger("deepfreeze.tests.workflow")
 
-# Accelerated ILM timings
-ILM_ROLLOVER_AGE = "3m"
-ILM_COLD_AGE = "10m"
-ILM_FROZEN_AGE = "20m"
-ILM_DELETE_AGE = "30m"
+# ILM timings
+ILM_ROLLOVER_AGE = "7m"
+ILM_COLD_AGE = "30m"
+ILM_FROZEN_AGE = "90m"
+ILM_DELETE_AGE = "180m"
 
 # Rotation schedule
-ROTATE_INTERVAL_SECS = 900   # 15 minutes between rotations
-ROTATE_KEEP = 1              # keep 1 repo mounted
-MAX_TOTAL_TIME_SECS = 7200   # 2 hour overall timeout
+ROTATE_INTERVAL_SECS = 1800  # 30 minutes between rotations
+ROTATE_KEEP = 8              # keep 8 repos mounted
+MAX_TOTAL_TIME_SECS = 18000  # 5 hour overall timeout
 
 # Fallback if es-loader not available
 NUM_TEST_DOCS = 200
