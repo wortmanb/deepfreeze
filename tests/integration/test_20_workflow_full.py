@@ -53,7 +53,7 @@ ILM_DELETE_AGE = "180m"
 
 # Scheduler
 ROTATE_INTERVAL_SECS = 1800  # 30 minutes
-ROTATE_KEEP = 8
+ROTATE_KEEP = 6
 
 # Timeouts
 MAX_ARCHIVE_WAIT_SECS = 21600  # 6 hours for archive wait
