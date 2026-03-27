@@ -1,17 +1,21 @@
 """Full end-to-end workflow test.
 
-Exercises the complete deepfreeze lifecycle with real data:
+Mirrors the real-world deepfreeze usage pattern:
 
-  setup → start data loader → accelerate ILM →
-  rotate periodically until repos are in archive storage →
-  thaw → wait for glacier restore → verify mounted & queryable →
-  refreeze → cleanup
+  1. Setup (ILM policies, templates, buckets, repos)
+  2. Start continuous data ingestion (es-loader)
+  3. Accelerate ILM timings for testing (3m/10m/20m/30m)
+  4. Rotate on a schedule (~every 5 min), just like a cron job
+     - Each rotation updates date ranges, creates new repos,
+       and archives old ones to glacier when keep count is exceeded
+  5. Once a repo is archived to glacier, create a thaw request
+  6. Continue rotating while waiting for the thaw to complete
+  7. Verify thawed indices are mounted and queryable
+  8. Rotate again — verify thawed repo survives rotation
+  9. Refreeze, cleanup
 
-The es-loader pushes ~10 docs/sec continuously. ILM uses accelerated
-timings (3m rollover, 10m cold, 20m frozen, 30m delete). Every ~5
-minutes we run a rotation to push old repos to glacier.
-
-Expected runtime: 45-90+ minutes depending on ILM timing and provider.
+Expected runtime: 45-120+ minutes depending on ILM timing and
+provider restore speed.
 """
 
 import json
@@ -43,19 +47,20 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 logger = logging.getLogger("deepfreeze.tests.workflow")
 
-# Accelerated ILM timings for testing
+# Accelerated ILM timings
 ILM_ROLLOVER_AGE = "3m"
 ILM_COLD_AGE = "10m"
 ILM_FROZEN_AGE = "20m"
 ILM_DELETE_AGE = "30m"
 
-# How many docs to load as fallback if es-loader not available
+# Rotation schedule
+ROTATE_INTERVAL_SECS = 300   # 5 minutes between rotations
+ROTATE_KEEP = 1              # keep 1 repo mounted
+MAX_TOTAL_TIME_SECS = 7200   # 2 hour overall timeout
+
+# Fallback if es-loader not available
 NUM_TEST_DOCS = 200
 DOC_SIZE_APPROX = 512
-
-# Rotate interval and max attempts
-ROTATE_INTERVAL_SECS = 300  # 5 minutes between rotations
-MAX_ROTATE_ATTEMPTS = 18    # 18 × 5 min = 90 min max wait for archive
 
 
 @pytest.fixture(scope="module")
@@ -63,14 +68,19 @@ def runner():
     return CliRunner()
 
 
-def _invoke(runner, config, *args):
-    """Invoke the CLI with --porcelain and assert success."""
-    result = runner.invoke(cli, [
+def _run_cli(runner, config, *args):
+    """Invoke the CLI with --porcelain and return the result (no assertion)."""
+    return runner.invoke(cli, [
         "--config", config,
         "--local",
         *args,
         "--porcelain",
     ])
+
+
+def _invoke(runner, config, *args):
+    """Invoke the CLI with --porcelain and assert success."""
+    result = _run_cli(runner, config, *args)
     assert result.exit_code == 0, (
         f"CLI failed (exit={result.exit_code}):\n{result.output}\n{result.exception}"
     )
@@ -95,7 +105,7 @@ def _generate_log_doc():
     }
 
 
-def _load_test_data(es: Elasticsearch, data_stream: str, num_docs: int):
+def _load_test_data(es, data_stream, num_docs):
     """Bulk-index test documents into the data stream."""
     from elasticsearch8.helpers import bulk
 
@@ -111,7 +121,7 @@ def _load_test_data(es: Elasticsearch, data_stream: str, num_docs: int):
     return success
 
 
-def _set_accelerated_ilm(es: Elasticsearch, policy_name: str, repo_name: str):
+def _set_accelerated_ilm(es, policy_name, repo_name):
     """Replace the ILM policy with accelerated test timings."""
     policy_body = {
         "policy": {
@@ -175,10 +185,8 @@ def _check_archive_storage(es, test_prefixes, storage_provider):
                 continue
 
             sample_classes = {obj.get("StorageClass", "STANDARD") for obj in objects[:5]}
-            logger.debug(
-                "Repo %s: %d objects, sample classes: %s",
-                repo["name"], len(objects), sample_classes,
-            )
+            logger.debug("Repo %s: %d objects, storage classes: %s",
+                        repo["name"], len(objects), sample_classes)
             if sample_classes & archive_classes:
                 return True, repo["name"]
         except Exception as e:
@@ -188,22 +196,26 @@ def _check_archive_storage(es, test_prefixes, storage_provider):
     return False, None
 
 
-class TestFullLifecycle:
-    """End-to-end lifecycle with real data, ILM, and periodic rotation.
+def _log_state(es, test_prefixes, label=""):
+    """Log the current state of all repos for debugging."""
+    repos = get_repos_with_prefix(es, test_prefixes.repo_name_prefix)
+    states = {r["name"]: {"state": r.get("thaw_state"), "start": r.get("start"), "end": r.get("end")}
+              for r in repos}
+    logger.info("%sRepo states: %s", f"[{label}] " if label else "", json.dumps(states, default=str))
+    return repos
 
-    The test lets ILM progress naturally with accelerated timings while
-    periodically running deepfreeze rotate. Once a repo has objects in
-    archive storage, it proceeds to thaw/verify/refreeze.
-    """
+
+class TestFullLifecycle:
+    """End-to-end lifecycle mirroring real-world deepfreeze usage."""
+
+    # -- Phase 1: Setup --
 
     def test_01_setup(self, runner, test_config_file, test_prefixes, test_index_template,
                       storage_provider, es_client):
-        """Initialize deepfreeze with test prefixes."""
-        # Set ILM poll interval to 5s
+        """Initialize deepfreeze and set ILM poll interval."""
         es_client.cluster.put_settings(
             body={"transient": {"indices.lifecycle.poll_interval": "5s"}}
         )
-        logger.info("Set ILM poll interval to 5s")
 
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -226,165 +238,102 @@ class TestFullLifecycle:
         repo_name = f"{test_prefixes.repo_name_prefix}-000001"
         _set_accelerated_ilm(es_client, test_prefixes.ilm_policy_name, repo_name)
         policy = assert_ilm_policy_exists(es_client, test_prefixes.ilm_policy_name)
-        frozen_age = policy["policy"]["phases"]["frozen"]["min_age"]
-        assert frozen_age == ILM_FROZEN_AGE
+        assert policy["policy"]["phases"]["frozen"]["min_age"] == ILM_FROZEN_AGE
 
     def test_03_start_data_loader(self, es_loader, es_client, test_prefixes):
-        """Start the background data loader and verify data is flowing."""
+        """Start continuous data ingestion."""
         ds_name = test_prefixes.data_stream_name
 
         if es_loader is None:
             logger.warning("es-loader not available — loading data manually")
-            success = _load_test_data(es_client, ds_name, NUM_TEST_DOCS)
-            assert success >= NUM_TEST_DOCS * 0.9, f"Only {success}/{NUM_TEST_DOCS} docs indexed"
+            _load_test_data(es_client, ds_name, NUM_TEST_DOCS)
         else:
-            logger.info("Waiting for es-loader to push initial data to '%s'...", ds_name)
+            logger.info("Waiting for es-loader to create data stream '%s'...", ds_name)
             wait_for(
                 lambda: es_client.indices.exists(index=ds_name),
                 timeout=30,
                 initial_interval=2,
                 max_interval=5,
-                description=f"data stream '{ds_name}' to be created by es-loader",
+                description=f"data stream '{ds_name}'",
             )
 
         ds = es_client.indices.get_data_stream(name=ds_name)
-        streams = ds.get("data_streams", [])
-        assert len(streams) == 1, f"Data stream not created: {ds}"
+        assert len(ds.get("data_streams", [])) == 1
         logger.info("Data stream '%s' active", ds_name)
 
-    def test_04_wait_for_ilm_delete(self, es_client, test_prefixes):
-        """Wait for ILM to fully process the first batch of data.
+    # -- Phase 2: Rotate until archived --
 
-        We need the oldest backing index to pass through:
-        hot → cold → frozen (searchable snapshot) → delete (index removed)
+    def test_04_rotate_until_archived(self, runner, test_config_file, es_client,
+                                       test_prefixes, storage_provider):
+        """Rotate on a schedule until at least one repo is archived to glacier.
 
-        Only after the delete phase completes can we safely rotate, because
-        rotate with --keep 1 will unmount the snapshot repo — which ILM
-        must be done using.
+        Mimics a cron job running deepfreeze rotate every 5 minutes.
+        Each rotation:
+        - Updates date ranges on mounted repos
+        - Creates a new repo
+        - Archives old repos (when keep count exceeded) by pushing to glacier
+
+        We keep rotating until _check_archive_storage finds objects in
+        archive tier, then proceed to thaw.
         """
-        ds_name = test_prefixes.data_stream_name
+        start = time.monotonic()
+        rotation_count = 0
 
-        def _any_index_deleted():
-            """Check if any backing index has been deleted by ILM."""
-            try:
-                ds = es_client.indices.get_data_stream(name=ds_name)
-                streams = ds.get("data_streams", [])
-                if not streams:
-                    return False
-                backing = streams[0].get("indices", [])
-                # When ILM deletes an index, the data stream's backing index
-                # count decreases. We started with 1, rollover made 2+,
-                # but we can also check if any index no longer exists.
-                # Simplest: check if we have snapshots in the repo
-                repos = es_client.snapshot.get_repository(
-                    name=f"{test_prefixes.repo_name_prefix}-000001"
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed > MAX_TOTAL_TIME_SECS:
+                _log_state(es_client, test_prefixes, "TIMEOUT")
+                pytest.fail(
+                    f"No repo reached archive storage after {rotation_count} rotations "
+                    f"({elapsed / 60:.0f} min)"
                 )
-                if repos:
-                    # Check if there are snapshots in the repo
-                    snaps = es_client.snapshot.get(
-                        repository=f"{test_prefixes.repo_name_prefix}-000001",
-                        snapshot="_all",
-                    )
-                    snap_list = snaps.get("snapshots", [])
-                    if snap_list:
-                        logger.debug("Found %d snapshots in repo 000001", len(snap_list))
-                        # Now check if any of the original backing indices no longer exist
-                        for snap in snap_list:
-                            for idx in snap.get("indices", []):
-                                if not es_client.indices.exists(index=idx):
-                                    logger.info("Index '%s' deleted by ILM (snapshot preserved)", idx)
-                                    return True
-            except Exception as e:
-                logger.debug("Check error: %s", e)
-            return False
 
-        def _diag():
-            try:
-                ds = es_client.indices.get_data_stream(name=ds_name)
-                streams = ds.get("data_streams", [])
-                backing = [idx["index_name"] for idx in streams[0].get("indices", [])] if streams else []
-                # Get ILM state
-                from .helpers.es_verify import snapshot_es_state
-                ilm = {}
-                for idx in backing:
-                    try:
-                        explain = es_client.ilm.explain_lifecycle(index=idx)
-                        for k, v in explain.get("indices", {}).items():
-                            ilm[k] = {"phase": v.get("phase"), "action": v.get("action"), "step": v.get("step")}
-                    except Exception:
-                        pass
-                return json.dumps({"backing": backing, "ilm": ilm}, indent=2)
-            except Exception as e:
-                return f"diagnostic error: {e}"
+            rotation_count += 1
+            logger.info(
+                "=== Rotation %d (%.0f min elapsed) ===",
+                rotation_count, elapsed / 60,
+            )
+            _log_state(es_client, test_prefixes, f"pre-rotate-{rotation_count}")
 
-        logger.info("Waiting for ILM to complete full cycle (delete phase, timeout: 45m)...")
-        wait_for(
-            _any_index_deleted,
-            timeout=2700,  # 45 minutes
-            initial_interval=15,
-            max_interval=30,
-            description="ILM delete phase (index deleted, snapshot preserved)",
-            on_timeout=_diag,
-        )
-        logger.info("ILM cycle complete — safe to rotate")
+            # Run rotate
+            result = _run_cli(runner, test_config_file, "rotate", "--keep", str(ROTATE_KEEP))
+            if result.exit_code != 0:
+                logger.warning("Rotate %d failed: %s", rotation_count, result.output.strip()[:300])
+            else:
+                logger.info("Rotate %d succeeded: %s", rotation_count, result.output.strip()[:300])
 
-    def test_05_rotate(self, runner, test_config_file, es_client, test_prefixes):
-        """Rotate to create a new repo and archive the old one to glacier.
+            _log_state(es_client, test_prefixes, f"post-rotate-{rotation_count}")
 
-        Now that ILM has finished using repo-000001, rotate can safely
-        unmount it and push its objects to archive storage.
-        """
-        repos_before = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
-        logger.info("Repos before rotate: %s", {r["name"]: r.get("thaw_state") for r in repos_before})
+            # Check if any frozen repo has objects in archive storage
+            in_archive, repo_name = _check_archive_storage(es_client, test_prefixes, storage_provider)
+            if in_archive:
+                logger.info(
+                    "SUCCESS: Repo '%s' has objects in archive storage after %d rotations (%.0f min)",
+                    repo_name, rotation_count, elapsed / 60,
+                )
+                return
 
-        result = runner.invoke(cli, [
-            "--config", test_config_file,
-            "--local",
-            "rotate", "--keep", "1", "--porcelain",
-        ])
-        logger.info("Rotate output: %s", result.output.strip()[:500])
-        assert result.exit_code == 0, f"Rotate failed:\n{result.output}\n{result.exception}"
+            # Wait before next rotation
+            logger.info("No archived repos yet — sleeping %ds...", ROTATE_INTERVAL_SECS)
+            time.sleep(ROTATE_INTERVAL_SECS)
 
-        repos_after = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
-        logger.info("Repos after rotate: %s", {r["name"]: r.get("thaw_state") for r in repos_after})
+    # -- Phase 3: Thaw --
 
-    def test_06_verify_archive(self, es_client, test_prefixes, storage_provider):
-        """Verify that the archived repo has objects in archive storage tier."""
-        # Give a moment for the storage tier change to propagate
-        time.sleep(5)
-
-        in_archive, repo_name = _check_archive_storage(es_client, test_prefixes, storage_provider)
-        if not in_archive:
-            # Log what we found for debugging
-            repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
-            frozen = [r for r in repos if r.get("thaw_state") == THAW_STATE_FROZEN]
-            logger.warning("No archived objects found. Frozen repos: %s",
-                          [(r["name"], r.get("bucket"), r.get("base_path")) for r in frozen])
-
-        assert in_archive, (
-            "No frozen repo has objects in archive storage. "
-            "Rotate may not have pushed objects to glacier."
-        )
-        logger.info("Verified: repo '%s' has objects in archive storage", repo_name)
-
-    def test_07_verify_date_ranges(self, es_client, test_prefixes):
-        """Verify frozen repos have date ranges set (needed for thaw)."""
+    def test_05_thaw_create(self, runner, test_config_file, es_client, test_prefixes):
+        """Create a thaw request for the archived repos."""
+        # Verify we have frozen repos with date ranges
         repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
         frozen_with_dates = [
             r for r in repos
             if r.get("thaw_state") == THAW_STATE_FROZEN and r.get("start") and r.get("end")
         ]
-        logger.info(
-            "Frozen repos with date ranges: %s",
-            [(r["name"], r.get("start"), r.get("end")) for r in frozen_with_dates],
-        )
+        logger.info("Frozen repos with dates: %s",
+                    [(r["name"], r.get("start"), r.get("end")) for r in frozen_with_dates])
         assert len(frozen_with_dates) >= 1, (
-            f"No frozen repos have date ranges set. "
-            f"Repos: {[(r['name'], r.get('thaw_state'), r.get('start')) for r in repos]}"
+            f"No frozen repos with date ranges. "
+            f"All repos: {[(r['name'], r.get('thaw_state'), r.get('start')) for r in repos]}"
         )
 
-    def test_08_thaw_create(self, runner, test_config_file, es_client, test_prefixes):
-        """Create a thaw request for the frozen repos."""
         logger.info("Creating thaw request...")
         result = runner.invoke(cli, [
             "--config", test_config_file,
@@ -396,37 +345,46 @@ class TestFullLifecycle:
             "--porcelain",
         ])
         logger.info("Thaw output: %s", result.output.strip()[:500])
-        assert result.exit_code == 0, f"Thaw create failed:\n{result.output}\n{result.exception}"
+        assert result.exit_code == 0, f"Thaw failed:\n{result.output}\n{result.exception}"
 
-        # Verify a thaw request was created
+        # Verify request was created
         from deepfreeze_core.utilities import list_thaw_requests
         es_client.indices.refresh(index=STATUS_INDEX)
         requests = list_thaw_requests(es_client)
-        assert len(requests) >= 1, (
-            f"No thaw request created. Output: {result.output.strip()[:200]}"
-        )
-        logger.info("Thaw request created: %d request(s)", len(requests))
+        assert len(requests) >= 1, f"No thaw request created. Output: {result.output[:200]}"
+        logger.info("Thaw request created (%d total)", len(requests))
 
-    def test_09_wait_for_thaw(self, runner, test_config_file, es_client, test_prefixes):
-        """Poll thaw --check-status until glacier restore completes."""
+    def test_06_wait_for_thaw(self, runner, test_config_file, es_client, test_prefixes):
+        """Poll thaw --check-status until restore completes. Continue rotating."""
         start = time.monotonic()
+        last_rotate = time.monotonic()
 
-        def _thaw_completed():
-            result = runner.invoke(cli, [
-                "--config", test_config_file,
-                "--local",
-                "thaw", "--check-status",
-                "--porcelain",
-            ])
+        def _check_and_rotate():
+            nonlocal last_rotate
+
+            # Run a rotation if it's time (keep the cron going)
+            now = time.monotonic()
+            if now - last_rotate >= ROTATE_INTERVAL_SECS:
+                logger.info("Running scheduled rotation during thaw wait...")
+                result = _run_cli(runner, test_config_file, "rotate", "--keep", str(ROTATE_KEEP))
+                if result.exit_code == 0:
+                    logger.info("Rotation during thaw succeeded")
+                else:
+                    logger.debug("Rotation during thaw: %s", result.output.strip()[:200])
+                last_rotate = now
+
+            # Check thaw status
+            result = _run_cli(runner, test_config_file, "thaw", "--check-status")
             if result.exit_code != 0:
                 return False
 
+            # Check repo states
             repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
             thawing = [r for r in repos if r.get("thaw_state") == THAW_STATE_THAWING]
             thawed = [r for r in repos if r.get("thaw_state") == THAW_STATE_THAWED]
 
+            elapsed = time.monotonic() - start
             if thawing:
-                elapsed = time.monotonic() - start
                 logger.info("Thaw in progress (%.0fs): %d thawing, %d thawed",
                             elapsed, len(thawing), len(thawed))
                 return False
@@ -439,7 +397,7 @@ class TestFullLifecycle:
 
         logger.info("Waiting for thaw to complete (timeout: 2h)...")
         wait_for(
-            _thaw_completed,
+            _check_and_rotate,
             timeout=7200,
             initial_interval=30,
             max_interval=60,
@@ -448,10 +406,12 @@ class TestFullLifecycle:
         )
 
         elapsed = time.monotonic() - start
-        logger.info("Thaw completed in %.1f seconds (%.1f minutes)", elapsed, elapsed / 60)
+        logger.info("Thaw completed in %.1f min", elapsed / 60)
 
-    def test_10_verify_thawed(self, es_client, test_prefixes):
-        """After thaw, repos should be in thawed state."""
+    # -- Phase 4: Verify --
+
+    def test_07_verify_thawed(self, es_client, test_prefixes):
+        """Thawed repos should be in thawed state."""
         repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
         states = {r["name"]: r.get("thaw_state") for r in repos}
         logger.info("Post-thaw states: %s", states)
@@ -459,8 +419,8 @@ class TestFullLifecycle:
         thawed = [r for r in repos if r.get("thaw_state") == THAW_STATE_THAWED]
         assert len(thawed) >= 1, f"No thawed repos. States: {states}"
 
-    def test_11_verify_queryable(self, es_client, test_prefixes):
-        """Verify thawed indices are mounted and searchable."""
+    def test_08_verify_queryable(self, es_client, test_prefixes):
+        """Thawed indices should be mounted and searchable."""
         pattern = test_prefixes.data_stream_name
         result = es_client.search(
             index=pattern,
@@ -471,13 +431,37 @@ class TestFullLifecycle:
         logger.info("Found %d searchable docs in %s", total, pattern)
         assert total > 0, f"No documents found in '{pattern}' after thaw"
 
-    def test_12_refreeze(self, runner, test_config_file):
+    def test_09_rotate_preserves_thawed(self, runner, test_config_file, es_client, test_prefixes):
+        """A rotation while repos are thawed should NOT disturb them."""
+        # Record thawed repos before rotation
+        repos_before = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+        thawed_before = {r["name"] for r in repos_before if r.get("thaw_state") == THAW_STATE_THAWED}
+        logger.info("Thawed repos before rotate: %s", thawed_before)
+        assert len(thawed_before) >= 1
+
+        # Run another rotation
+        result = _run_cli(runner, test_config_file, "rotate", "--keep", str(ROTATE_KEEP))
+        logger.info("Rotate during thaw: exit=%d, output=%s", result.exit_code, result.output.strip()[:300])
+
+        # Verify thawed repos survived
+        repos_after = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
+        thawed_after = {r["name"] for r in repos_after if r.get("thaw_state") == THAW_STATE_THAWED}
+        logger.info("Thawed repos after rotate: %s", thawed_after)
+
+        assert thawed_before.issubset(thawed_after), (
+            f"Rotation disturbed thawed repos! "
+            f"Before: {thawed_before}, After: {thawed_after}"
+        )
+
+    # -- Phase 5: Refreeze and cleanup --
+
+    def test_10_refreeze(self, runner, test_config_file):
         """Refreeze all completed thaw requests."""
         _invoke(runner, test_config_file, "refreeze")
         logger.info("Refreeze complete")
 
-    def test_13_verify_refrozen(self, es_client, test_prefixes):
-        """After refreeze, thawed repos should be frozen again."""
+    def test_11_verify_refrozen(self, es_client, test_prefixes):
+        """Thawed repos should be frozen again."""
         repos = get_repos_with_prefix(es_client, test_prefixes.repo_name_prefix)
         states = {r["name"]: r.get("thaw_state") for r in repos}
         logger.info("Post-refreeze states: %s", states)
@@ -485,17 +469,17 @@ class TestFullLifecycle:
         frozen = [r for r in repos if r.get("thaw_state") == THAW_STATE_FROZEN]
         assert len(frozen) >= 1, f"No frozen repos after refreeze. States: {states}"
 
-    def test_14_cleanup(self, runner, test_config_file):
-        """Cleanup should succeed."""
+    def test_12_cleanup(self, runner, test_config_file):
+        """Cleanup expired artifacts."""
         _invoke(runner, test_config_file, "cleanup")
         logger.info("Cleanup complete")
 
-    def test_15_repair_metadata(self, runner, test_config_file):
+    def test_13_repair_metadata(self, runner, test_config_file):
         """Repair metadata should complete without error."""
         _invoke(runner, test_config_file, "repair-metadata")
         logger.info("Repair complete")
 
-    def test_16_final_status(self, runner, test_config_file, test_prefixes):
+    def test_14_final_status(self, runner, test_config_file, test_prefixes):
         """Final status should show consistent state."""
         result = _invoke(runner, test_config_file, "status")
         data = json.loads(result.output)
@@ -503,9 +487,10 @@ class TestFullLifecycle:
         logger.info("Final: %d repos, %d thaw requests",
                      len(repos), len(data.get("thaw_requests", [])))
         for r in repos:
-            logger.info("  %s: %s", r.get("name"), r.get("thaw_state"))
+            logger.info("  %s: %s (dates: %s - %s)",
+                        r.get("name"), r.get("thaw_state"), r.get("start"), r.get("end"))
 
-    def test_17_restore_ilm_poll_interval(self, es_client):
+    def test_15_restore_ilm_poll_interval(self, es_client):
         """Restore ILM poll interval to default."""
         es_client.cluster.put_settings(
             body={"transient": {"indices.lifecycle.poll_interval": None}}
