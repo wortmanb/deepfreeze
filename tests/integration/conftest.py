@@ -277,7 +277,22 @@ def _find_free_port() -> int:
 
 @pytest.fixture(scope="session")
 def server_url(test_config_file):
-    """Start deepfreeze-server on an ephemeral port. Yields the base URL."""
+    """Connect to an existing server or start one on an ephemeral port.
+
+    If DEEPFREEZE_SERVER_URL is set, use that (assume server is already
+    running). Otherwise, start a new server process and stop it at teardown.
+    """
+    existing_url = os.environ.get("DEEPFREEZE_SERVER_URL")
+    if existing_url:
+        # Verify it's actually running
+        try:
+            wait_for_server_ready(existing_url, timeout=10)
+            logger.info("Using existing server at %s", existing_url)
+            yield existing_url
+            return
+        except TimeoutError:
+            logger.warning("DEEPFREEZE_SERVER_URL=%s not reachable, starting new server", existing_url)
+
     port = _find_free_port()
     proc = subprocess.Popen(
         [
