@@ -236,7 +236,30 @@ class TestFullLifecycle:
         assert policy["policy"]["phases"]["frozen"]["min_age"] == ILM_FROZEN_AGE
 
     def test_03_schedule_rotate(self, http_client):
-        """Schedule a rotate job in the deepfreeze-server."""
+        """Schedule a rotate job in the deepfreeze-server.
+
+        If a rotate job already exists, save it off to restore at teardown.
+        """
+        # Check for existing scheduled jobs
+        resp = http_client.get("/scheduler/jobs")
+        assert resp.status_code == 200
+        existing_jobs = resp.json().get("jobs", [])
+        existing_rotate = [j for j in existing_jobs if j.get("action") == "rotate"]
+
+        if existing_rotate:
+            # Save the existing rotate job config for restoration in test_14
+            self.__class__._saved_rotate_job = existing_rotate[0]
+            logger.info("Saved existing rotate job: %s", existing_rotate[0].get("name"))
+
+            # Remove it so we can install our own
+            for job in existing_rotate:
+                name = job.get("name")
+                http_client.delete(f"/scheduler/jobs/{name}")
+                logger.info("Removed existing rotate job: %s", name)
+        else:
+            self.__class__._saved_rotate_job = None
+
+        # Schedule our test rotate job
         resp = http_client.post("/scheduler/jobs", json={
             "name": "test-rotate",
             "action": "rotate",
@@ -532,9 +555,35 @@ class TestFullLifecycle:
             logger.info("  %s: %s (dates: %s - %s)",
                         r.get("name"), r.get("thaw_state"), r.get("start"), r.get("end"))
 
-    def test_14_restore_ilm_poll_interval(self, es_client):
-        """Restore ILM poll interval to default."""
+    def test_14_restore_settings(self, es_client, http_client):
+        """Restore ILM poll interval and scheduler to pre-test state."""
+        # Restore ILM poll interval
         es_client.cluster.put_settings(
             body={"transient": {"indices.lifecycle.poll_interval": None}}
         )
         logger.info("Restored ILM poll interval to default")
+
+        # Remove our test rotate job
+        try:
+            http_client.delete("/scheduler/jobs/test-rotate")
+            logger.info("Removed test-rotate scheduled job")
+        except Exception:
+            pass
+
+        # Restore the original rotate job if one was saved
+        saved = getattr(self.__class__, "_saved_rotate_job", None)
+        if saved:
+            try:
+                resp = http_client.post("/scheduler/jobs", json={
+                    "name": saved.get("name"),
+                    "action": saved.get("action"),
+                    "params": saved.get("params", {}),
+                    "cron": saved.get("cron"),
+                    "interval_seconds": saved.get("interval_seconds"),
+                })
+                if resp.status_code == 200:
+                    logger.info("Restored original rotate job: %s", saved.get("name"))
+                else:
+                    logger.warning("Failed to restore rotate job: %s", resp.text)
+            except Exception as e:
+                logger.warning("Error restoring rotate job: %s", e)
