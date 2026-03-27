@@ -54,7 +54,7 @@ ILM_FROZEN_AGE = "20m"
 ILM_DELETE_AGE = "30m"
 
 # Rotation schedule
-ROTATE_INTERVAL_SECS = 300   # 5 minutes between rotations
+ROTATE_INTERVAL_SECS = 900   # 15 minutes between rotations
 ROTATE_KEEP = 1              # keep 1 repo mounted
 MAX_TOTAL_TIME_SECS = 7200   # 2 hour overall timeout
 
