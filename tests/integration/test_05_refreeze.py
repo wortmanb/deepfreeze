@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.cli]
 
 @pytest.fixture
 def runner():
-    return CliRunner()
+    return CliRunner(mix_stderr=False)
 
 
 class TestRefreezeCLI:
