@@ -125,16 +125,30 @@ def _set_ilm_policy(es, policy_name, repo_name):
             "phases": {
                 "hot": {
                     "min_age": "0ms",
-                    "actions": {"rollover": {"max_age": ILM_ROLLOVER_AGE, "max_size": "1gb"}},
+                    "actions": {
+                        "rollover": {"max_age": ILM_ROLLOVER_AGE, "max_size": "45gb"},
+                    },
                 },
                 "cold": {
                     "min_age": ILM_COLD_AGE,
-                    "actions": {"set_priority": {"priority": 0}},
+                    "actions": {
+                        "searchable_snapshot": {
+                            "snapshot_repository": repo_name,
+                            "force_merge_index": True,
+                        },
+                        "allocate": {
+                            "number_of_replicas": 0,
+                        },
+                        "set_priority": {"priority": 0},
+                    },
                 },
                 "frozen": {
                     "min_age": ILM_FROZEN_AGE,
                     "actions": {
-                        "searchable_snapshot": {"snapshot_repository": repo_name},
+                        "searchable_snapshot": {
+                            "snapshot_repository": repo_name,
+                            "force_merge_index": True,
+                        },
                     },
                 },
                 "delete": {
