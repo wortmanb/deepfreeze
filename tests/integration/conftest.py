@@ -449,14 +449,18 @@ def pytest_runtest_logstart(nodeid, location):
 
     This fires *before* the test executes, so you can see which test
     is currently running and when it started — even during long waits.
+
+    Uses os.write() to the real fd 2 (stderr) to avoid conflicts with
+    Click's CliRunner which temporarily redirects sys.stderr.
     """
-    import sys
+    import os
     from datetime import datetime
     ts = datetime.now().strftime("%H:%M:%S")
-    # Write directly to stderr so it appears immediately (not buffered)
     short_name = nodeid.split("::")[-1]
-    sys.stderr.write(f"[{ts}] starting {short_name}\n")
-    sys.stderr.flush()
+    try:
+        os.write(2, f"[{ts}] starting {short_name}\n".encode())
+    except OSError:
+        pass  # fd 2 not available (e.g., redirected to /dev/null)
 
 
 # ---------------------------------------------------------------------------
