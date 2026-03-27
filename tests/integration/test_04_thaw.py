@@ -10,7 +10,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.cli, pytest.mark.slow]
 
 @pytest.fixture
 def runner():
-    return CliRunner()
+    return CliRunner(mix_stderr=False)
 
 
 class TestThawCLI:

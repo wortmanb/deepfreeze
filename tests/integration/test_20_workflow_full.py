@@ -65,7 +65,7 @@ DOC_SIZE_APPROX = 512
 
 @pytest.fixture(scope="module")
 def runner():
-    return CliRunner()
+    return CliRunner(mix_stderr=False)
 
 
 def _run_cli(runner, config, *args):
