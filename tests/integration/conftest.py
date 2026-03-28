@@ -282,17 +282,23 @@ def server_url(test_config_file):
     If DEEPFREEZE_SERVER_URL is set, use that (assume server is already
     running). Otherwise, start a new server process and stop it at teardown.
     """
-    existing_url = os.environ.get("DEEPFREEZE_SERVER_URL")
-    if existing_url:
-        # Verify it's actually running
+    # Try DEEPFREEZE_SERVER_URL, then localhost:8000, then start a new server
+    candidates = []
+    env_url = os.environ.get("DEEPFREEZE_SERVER_URL")
+    if env_url:
+        candidates.append(env_url)
+    candidates.append("http://localhost:8000")
+
+    for url in candidates:
         try:
-            wait_for_server_ready(existing_url, timeout=10)
-            logger.info("Using existing server at %s", existing_url)
-            yield existing_url
+            wait_for_server_ready(url, timeout=5)
+            logger.info("Using existing server at %s", url)
+            yield url
             return
         except TimeoutError:
-            logger.warning("DEEPFREEZE_SERVER_URL=%s not reachable, starting new server", existing_url)
+            logger.debug("Server at %s not reachable", url)
 
+    # No existing server found — start one
     port = _find_free_port()
     proc = subprocess.Popen(
         [
