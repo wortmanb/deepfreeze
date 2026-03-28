@@ -246,7 +246,7 @@ export default function Actions() {
       <EuiFlexGroup gutterSize="l" wrap>
         {actionCards.map((ac) => (
           <EuiFlexItem key={ac.id} style={{ minWidth: 280 }}>
-            <EuiPanel hasBorder paddingSize="l">
+            <EuiPanel hasBorder paddingSize="l" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <EuiFlexGroup alignItems="center" gutterSize="m" responsive={false}>
                 <EuiFlexItem grow={false}>
                   <EuiIcon type={ac.icon} size="xl" color={ac.color} />
@@ -261,14 +261,15 @@ export default function Actions() {
               <EuiText size="s" color="subdued">
                 <p>{ac.description}</p>
               </EuiText>
-              <EuiSpacer size="m" />
-              <EuiButton
-                color={ac.color}
-                onClick={() => setActiveAction(ac.id)}
-                fullWidth
-              >
-                Run {ac.title}
-              </EuiButton>
+              <div style={{ marginTop: 'auto', paddingTop: 16 }}>
+                <EuiButton
+                  color={ac.color}
+                  onClick={() => setActiveAction(ac.id)}
+                  fullWidth
+                >
+                  Run {ac.title}
+                </EuiButton>
+              </div>
             </EuiPanel>
           </EuiFlexItem>
         ))}
