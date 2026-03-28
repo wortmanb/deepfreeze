@@ -48,8 +48,8 @@ logger = logging.getLogger("deepfreeze.tests.workflow")
 # ILM timings
 ILM_ROLLOVER_AGE = "7m"
 ILM_COLD_AGE = "30m"
-ILM_FROZEN_AGE = "90m"
-ILM_DELETE_AGE = "180m"
+ILM_FROZEN_AGE = "60m"
+ILM_DELETE_AGE = "90m"
 
 # Scheduler
 ROTATE_INTERVAL_SECS = 1800  # 30 minutes
