@@ -19,7 +19,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.cli]
 
 @pytest.fixture
 def runner():
-    return CliRunner(mix_stderr=False)
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        return CliRunner()
 
 
 def _setup_args(test_prefixes, storage_provider):

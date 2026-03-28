@@ -67,7 +67,11 @@ DOC_SIZE_APPROX = 512
 
 @pytest.fixture(scope="module")
 def runner():
-    return CliRunner(mix_stderr=False)
+    try:
+        return CliRunner(mix_stderr=False)
+    except TypeError:
+        # Click 9.x removed mix_stderr
+        return CliRunner()
 
 
 def _invoke(runner, config, *args):
