@@ -102,6 +102,9 @@ export default function Actions() {
   const [thawDuration, setThawDuration] = useState<number>(30);
   const [dryRun, setDryRun] = useState(false);
 
+  // Rotate form state
+  const [rotateKeep, setRotateKeep] = useState<number>(6);
+
   // Refreeze form state
   const [thawRequests, setThawRequests] = useState<ThawRequest[]>([]);
   const [selectedRequestId, setSelectedRequestId] = useState<string>('__all__');
@@ -143,7 +146,7 @@ export default function Actions() {
 
       switch (activeAction) {
         case 'rotate':
-          result = await api.rotate({ dry_run: dryRun });
+          result = await api.rotate({ keep: rotateKeep, dry_run: dryRun });
           break;
         case 'thaw':
           result = await api.thawCreate({
@@ -318,6 +321,22 @@ export default function Actions() {
                   onChange={(e) => setThawDuration(Number(e.target.value))}
                   min={1}
                   max={365}
+                />
+              </EuiFormRow>
+            </EuiForm>
+          )}
+
+          {activeAction === 'rotate' && (
+            <EuiForm>
+              <EuiFormRow
+                label="Keep"
+                helpText="Number of repositories to keep mounted after rotation"
+              >
+                <EuiFieldNumber
+                  value={rotateKeep}
+                  onChange={(e) => setRotateKeep(Number(e.target.value))}
+                  min={1}
+                  max={100}
                 />
               </EuiFormRow>
             </EuiForm>
