@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   EuiFlexGroup,
   EuiFlexItem,
@@ -15,6 +15,8 @@ import {
   EuiSwitch,
   EuiGlobalToastList,
   EuiIcon,
+  EuiSuperSelect,
+  EuiBadge,
 } from '@elastic/eui';
 import moment, { type Moment } from 'moment';
 import { api, type CommandResult } from '../api/client';
@@ -72,6 +74,23 @@ interface Toast {
   text?: string;
 }
 
+interface ThawRequest {
+  request_id: string;
+  status: string;
+  start_date?: string;
+  end_date?: string;
+  created?: string;
+  repos?: string[];
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  completed: 'success',
+  in_progress: 'warning',
+  thawing: 'warning',
+  failed: 'danger',
+  refrozen: 'default',
+};
+
 export default function Actions() {
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -83,6 +102,11 @@ export default function Actions() {
   const [thawDuration, setThawDuration] = useState<number>(30);
   const [dryRun, setDryRun] = useState(false);
 
+  // Refreeze form state
+  const [thawRequests, setThawRequests] = useState<ThawRequest[]>([]);
+  const [selectedRequestId, setSelectedRequestId] = useState<string>('__all__');
+  const [loadingRequests, setLoadingRequests] = useState(false);
+
   const addToast = useCallback((title: string, color: 'success' | 'danger' | 'warning', text?: string) => {
     const id = String(Date.now());
     setToasts((prev) => [...prev, { id, title, color, text }]);
@@ -91,6 +115,24 @@ export default function Actions() {
   const removeToast = useCallback((removedToast: { id: string }) => {
     setToasts((prev) => prev.filter((t) => t.id !== removedToast.id));
   }, []);
+
+  // Fetch thaw requests when refreeze modal opens
+  useEffect(() => {
+    if (activeAction === 'refreeze') {
+      setLoadingRequests(true);
+      api.getThawRequests()
+        .then((data) => {
+          const requests = (data.thaw_requests || []) as ThawRequest[];
+          // Only show requests that can be refrozen (completed or in_progress)
+          const refreezeble = requests.filter(
+            (r) => r.status === 'completed' || r.status === 'in_progress'
+          );
+          setThawRequests(refreezeble);
+        })
+        .catch(() => setThawRequests([]))
+        .finally(() => setLoadingRequests(false));
+    }
+  }, [activeAction]);
 
   const handleExecute = async () => {
     if (!activeAction) return;
@@ -118,7 +160,10 @@ export default function Actions() {
           result = await api.repair({ dry_run: dryRun });
           break;
         case 'refreeze':
-          result = await api.refreeze({ dry_run: dryRun });
+          result = await api.refreeze({
+            request_id: selectedRequestId === '__all__' ? undefined : selectedRequestId,
+            dry_run: dryRun,
+          });
           break;
         default:
           throw new Error(`Unknown action: ${activeAction}`);
@@ -146,10 +191,49 @@ export default function Actions() {
     } finally {
       setExecuting(false);
       setActiveAction(null);
+      setSelectedRequestId('__all__');
     }
   };
 
   const card = activeAction ? actionCards.find((c) => c.id === activeAction) : null;
+
+  // Build refreeze selector options
+  const refreezeOptions = [
+    {
+      value: '__all__',
+      inputDisplay: 'All completed thaw requests',
+      dropdownDisplay: (
+        <>
+          <strong>All completed thaw requests</strong>
+          <EuiText size="xs" color="subdued"><p>Refreeze every completed thaw request at once</p></EuiText>
+        </>
+      ),
+    },
+    ...thawRequests.map((req) => {
+      const dates = req.start_date && req.end_date
+        ? `${req.start_date.substring(0, 16)} \u2014 ${req.end_date.substring(0, 16)}`
+        : 'No date range';
+      const repoCount = req.repos?.length || 0;
+      return {
+        value: req.request_id,
+        inputDisplay: `${req.request_id.substring(0, 8)}... (${dates})`,
+        dropdownDisplay: (
+          <>
+            <strong>{req.request_id.substring(0, 8)}...</strong>
+            {' '}
+            <EuiBadge color={STATUS_COLORS[req.status] || 'default'}>{req.status}</EuiBadge>
+            <EuiText size="xs" color="subdued">
+              <p>
+                {dates}
+                {repoCount > 0 && ` \u00b7 ${repoCount} repo${repoCount !== 1 ? 's' : ''}`}
+                {req.created && ` \u00b7 Created ${req.created.substring(0, 16)}`}
+              </p>
+            </EuiText>
+          </>
+        ),
+      };
+    }),
+  ];
 
   return (
     <>
@@ -194,7 +278,7 @@ export default function Actions() {
       {activeAction && card && (
         <EuiConfirmModal
           title={`Run ${card.title}?`}
-          onCancel={() => setActiveAction(null)}
+          onCancel={() => { setActiveAction(null); setSelectedRequestId('__all__'); }}
           onConfirm={handleExecute}
           cancelButtonText="Cancel"
           confirmButtonText={executing ? 'Executing...' : `Run ${card.title}`}
@@ -233,6 +317,27 @@ export default function Actions() {
                   onChange={(e) => setThawDuration(Number(e.target.value))}
                   min={1}
                   max={365}
+                />
+              </EuiFormRow>
+            </EuiForm>
+          )}
+
+          {activeAction === 'refreeze' && (
+            <EuiForm>
+              <EuiFormRow
+                label="Thaw request to refreeze"
+                helpText={
+                  thawRequests.length === 0 && !loadingRequests
+                    ? 'No completed thaw requests found'
+                    : undefined
+                }
+              >
+                <EuiSuperSelect
+                  options={refreezeOptions}
+                  valueOfSelected={selectedRequestId}
+                  onChange={(value) => setSelectedRequestId(value)}
+                  isLoading={loadingRequests}
+                  fullWidth
                 />
               </EuiFormRow>
             </EuiForm>
