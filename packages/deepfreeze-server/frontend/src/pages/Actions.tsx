@@ -122,7 +122,7 @@ export default function Actions() {
       setLoadingRequests(true);
       api.getThawRequests()
         .then((data) => {
-          const requests = (data.thaw_requests || []) as ThawRequest[];
+          const requests = (data.thaw_requests || []).map((r: Record<string, unknown>) => r as unknown as ThawRequest);
           // Only show requests that can be refrozen (completed or in_progress)
           const refreezeble = requests.filter(
             (r) => r.status === 'completed' || r.status === 'in_progress'
