@@ -13,6 +13,7 @@ import {
 } from '@elastic/eui';
 import { api } from '../api/client';
 import type { SystemStatus } from '../../common/types';
+import JobMonitor from '../components/job_monitor';
 
 export default function Overview() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -130,6 +131,11 @@ export default function Overview() {
           </EuiPanel>
         </EuiFlexItem>
       </EuiFlexGroup>
+
+      <EuiSpacer size="m" />
+
+      {/* Active jobs */}
+      <JobMonitor />
 
       <EuiSpacer size="m" />
 

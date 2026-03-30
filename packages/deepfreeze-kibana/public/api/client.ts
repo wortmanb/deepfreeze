@@ -14,12 +14,13 @@ import type {
   AuditEntry,
   ActionHistoryEntry,
   ScheduledJob,
+  Job,
   ServiceHealth,
   ServiceReady,
 } from '../../common/types';
 
 // Re-export types for page imports
-export type { SystemStatus, CommandResult, RestoreProgress, AuditEntry, ActionHistoryEntry, ScheduledJob };
+export type { SystemStatus, CommandResult, RestoreProgress, AuditEntry, ActionHistoryEntry, ScheduledJob, Job };
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -110,6 +111,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(params),
     }),
+
+  // Jobs
+  getJobs: (status?: string) => {
+    const params = status ? `?status=${status}` : '';
+    return request<{ jobs: Job[] }>(`/jobs${params}`);
+  },
+
+  getJob: (jobId: string) => request<Job>(`/jobs/${jobId}`),
+
+  cancelJob: (jobId: string) =>
+    request<{ job_id: string; status: string }>(`/jobs/${jobId}`, { method: 'DELETE' }),
 
   // Scheduler
   getScheduledJobs: () =>

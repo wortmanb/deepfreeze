@@ -16,6 +16,11 @@ export function registerEventRoutes(router: IRouter, client: DeepfreezeClient, l
           channel: schema.maybe(schema.string()),
         }),
       },
+      options: {
+        // EventSource can't send custom headers, so we exempt this
+        // route from XSRF protection. It's a read-only GET endpoint.
+        xsrfRequired: false,
+      },
     },
     async (_context, request, response) => {
       try {

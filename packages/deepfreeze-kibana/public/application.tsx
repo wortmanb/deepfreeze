@@ -6,6 +6,10 @@ import {
   EuiSideNav,
   EuiSpacer,
   EuiIcon,
+  EuiFlexGroup,
+  EuiFlexItem,
+  EuiCallOut,
+  EuiButton,
 } from '@elastic/eui';
 import { AppMountParameters, CoreStart } from '@kbn/core/public';
 
@@ -15,11 +19,10 @@ import ThawRequests from './pages/thaw_requests';
 import Actions from './pages/actions';
 import Scheduler from './pages/scheduler';
 import Activity from './pages/activity';
+import ServiceHealth from './components/service_health';
 
 function DeepfreezeApp({ history, basename }: { history: AppMountParameters['history']; basename: string }) {
   const [isSideNavOpenOnMobile, setIsSideNavOpenOnMobile] = React.useState(false);
-
-  // Determine current path for nav highlighting
   const currentPath = history.location.pathname;
 
   const sideNavItems = [
@@ -78,6 +81,8 @@ function DeepfreezeApp({ history, basename }: { history: AppMountParameters['his
       <EuiPageTemplate panelled restrictWidth={false}>
         <EuiPageTemplate.Sidebar sticky>
           <EuiSpacer size="s" />
+          <ServiceHealth />
+          <EuiSpacer size="m" />
           <EuiSideNav
             mobileTitle="Navigation"
             toggleOpenOnMobile={() => setIsSideNavOpenOnMobile(!isSideNavOpenOnMobile)}
@@ -106,6 +111,5 @@ export function renderApp(coreStart: CoreStart, { element, history, appBasePath 
     element,
   );
 
-  // Return unmount callback
   return () => ReactDOM.unmountComponentAtNode(element);
 }
