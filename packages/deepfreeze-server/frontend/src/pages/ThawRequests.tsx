@@ -336,7 +336,7 @@ export default function ThawRequests() {
               This will unmount the repositories and return them to frozen state for thaw request{' '}
               <strong>{String(refreezeTarget.request_id || '').substring(0, 8)}</strong>.
             </p>
-            {refreezeTarget.start_date && refreezeTarget.end_date && (
+            {Boolean(refreezeTarget.start_date && refreezeTarget.end_date) && (
               <p>
                 Date range: {String(trimDate(refreezeTarget.start_date) || '?')} &rarr; {String(trimDate(refreezeTarget.end_date) || '?')}
               </p>
