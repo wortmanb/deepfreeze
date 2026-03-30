@@ -11,6 +11,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.constants import (
     STATUS_INDEX,
     THAW_STATE_EXPIRED,
@@ -18,7 +19,6 @@ from deepfreeze_core.constants import (
     THAW_STATUS_FAILED,
     THAW_STATUS_REFROZEN,
 )
-from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.exceptions import (
     MissingIndexError,
     MissingSettingsError,
