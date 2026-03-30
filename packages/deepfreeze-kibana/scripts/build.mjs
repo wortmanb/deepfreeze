@@ -41,6 +41,7 @@ try {
     --platform=node \
     --target=node18 \
     --external:@kbn/* \
+    --resolve-extensions=.ts,.tsx,.js,.json \
     --log-level=warning`, {
     stdio: 'inherit',
     cwd: ROOT,
@@ -59,6 +60,7 @@ try {
     --format=cjs \
     --platform=node \
     --target=node18 \
+    --resolve-extensions=.ts,.tsx,.js,.json \
     --log-level=warning`, {
     stdio: 'inherit',
     cwd: ROOT,
@@ -82,6 +84,7 @@ try {
     --target=es2020 \
     --loader:.tsx=tsx \
     --jsx=transform \
+    --resolve-extensions=.ts,.tsx,.js,.json \
     --external:@kbn/* \
     --external:react \
     --external:react-dom \
