@@ -103,6 +103,7 @@ console.log('  Copying manifest...');
 
 const manifest = JSON.parse(readFileSync(resolve(ROOT, 'kibana.json'), 'utf8'));
 manifest.version = KIBANA_VERSION;
+manifest.kibanaVersion = KIBANA_VERSION;
 writeFileSync(resolve(TARGET, 'kibana.json'), JSON.stringify(manifest, null, 2));
 
 writeFileSync(resolve(TARGET, 'package.json'), JSON.stringify({
