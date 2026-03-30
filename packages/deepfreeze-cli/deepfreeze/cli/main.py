@@ -19,7 +19,12 @@ from deepfreeze_core import (
 )
 
 from deepfreeze import __version__
-from deepfreeze.config import configure_logging, get_elasticsearch_config, get_server_config, load_config
+from deepfreeze.config import (
+    configure_logging,
+    get_elasticsearch_config,
+    get_server_config,
+    load_config,
+)
 
 today = datetime.today()
 
@@ -954,7 +959,7 @@ def thaw(
 
     remote = ctx.obj.get("remote_client")
     if remote:
-        from deepfreeze.cli.display import display_command_result, display_status
+        from deepfreeze.cli.display import display_status
         try:
             if list_requests:
                 # List mode — fetch thaw requests from status endpoint

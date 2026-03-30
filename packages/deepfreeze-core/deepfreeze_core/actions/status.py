@@ -13,8 +13,8 @@ from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 
-from deepfreeze_core.constants import STATUS_INDEX
 from deepfreeze_core.audit import AuditLogger
+from deepfreeze_core.constants import STATUS_INDEX
 from deepfreeze_core.exceptions import (
     ActionError,
     MissingIndexError,
@@ -254,7 +254,7 @@ class Status:
                 phases = policy_body.get("phases", {})
 
                 # Check if any phase has a searchable_snapshot action
-                for phase_name, phase_config in phases.items():
+                for _phase_name, phase_config in phases.items():
                     actions = phase_config.get("actions", {})
                     if "searchable_snapshot" in actions:
                         snapshot_repo = actions["searchable_snapshot"].get(
