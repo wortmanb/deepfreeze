@@ -40,6 +40,39 @@ logging:
   # Log format: default, json, logstash, or custom format string
   # logformat: default
 
+# Server settings (for deepfreeze-server daemon)
+# server:
+#   host: 0.0.0.0
+#   port: 8000
+#   refresh_interval: 30.0   # Status cache refresh interval in seconds
+#
+#   # API token authentication (optional)
+#   auth:
+#     tokens:
+#       - name: admin
+#         token: df_tok_changeme
+#         roles: [admin]
+#       - name: readonly
+#         token: df_tok_viewonly
+#         roles: [viewer]
+#
+#   # TLS (optional, recommended for remote access)
+#   tls:
+#     cert: /etc/deepfreeze/server.crt
+#     key: /etc/deepfreeze/server.key
+#
+#   # Pre-configured scheduled jobs (optional, can also be added via Web UI)
+#   scheduled_jobs:
+#     - name: monthly-rotate
+#       action: rotate
+#       cron: "0 2 1 * *"
+#       params:
+#         keep: 6
+
+# CLI remote server settings (for connecting CLI to a remote deepfreeze-server)
+# server_url: https://deepfreeze.example.com:8000
+# api_token: df_tok_changeme
+
 # Environment variable overrides:
 # All settings can be overridden with environment variables:
 #

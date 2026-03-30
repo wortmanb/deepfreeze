@@ -15,7 +15,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-import botocore
 from elasticsearch8 import Elasticsearch, NotFoundError
 
 from deepfreeze_core.constants import SETTINGS_ID, STATUS_INDEX
@@ -23,80 +22,63 @@ from deepfreeze_core.exceptions import ActionError, MissingIndexError
 from deepfreeze_core.helpers import Repository, Settings
 from deepfreeze_core.s3client import S3Client
 
+loggit = logging.getLogger("deepfreeze.utilities")
 
-def push_to_glacier(s3: S3Client, repo: Repository) -> bool:
-    """Push objects to Glacier storage
 
-    :param s3: The S3 client object
+def push_to_glacier(
+    s3: S3Client, repo: Repository, storage_class: str = "GLACIER"
+) -> bool:
+    """Push objects to archive storage (Glacier for AWS, Archive tier for Azure, etc.)
+
+    Uses the storage client's refreeze method which handles provider-specific
+    archiving correctly:
+    - AWS S3: Copy-in-place with new storage class
+    - Azure: Direct tier change with set_standard_blob_tier()
+    - GCP: Direct storage class change
+
+    :param s3: The storage client object
     :type s3: S3Client
-    :param repo: The repository to push to Glacier
+    :param repo: The repository to archive
     :type repo: Repository
+    :param storage_class: Target storage class (default: GLACIER)
+    :type storage_class: str
 
-    :return: True if all objects were successfully moved, False otherwise
+    :return: True if archiving completed (may have partial failures), False on error
     :rtype: bool
-
-    :raises Exception: If the object is not in the restoration process
     """
+
+
     try:
-        # Normalize base_path: remove leading/trailing slashes, ensure it ends with /
+        # Normalize base_path: remove leading/trailing slashes
         base_path = repo.base_path.strip("/")
         if base_path:
             base_path += "/"
 
-        # Initialize variables for pagination
-        success = True
-        object_count = 0
-
-        # List objects
-        objects = s3.list_objects(repo.bucket, base_path)
-
-        # Process each object
-        for obj in objects:
-            key = obj["Key"]
-            current_storage_class = obj.get("StorageClass", "STANDARD")
-
-            # Log the object being processed
-            logging.info(
-                "Processing object: s3://%s/%s (Current: %s)",
-                repo.bucket,
-                key,
-                current_storage_class,
-            )
-
-            try:
-                # Copy object to itself with new storage class
-                copy_source = {"Bucket": repo.bucket, "Key": key}
-                s3.copy_object(
-                    Bucket=repo.bucket,
-                    Key=key,
-                    CopySource=copy_source,
-                    StorageClass="GLACIER",
-                )
-
-                # Log success
-                logging.info(
-                    "Successfully moved s3://%s/%s to GLACIER", repo.bucket, key
-                )
-                object_count += 1
-
-            except botocore.exceptions.ClientError as e:
-                logging.error("Failed to move s3://%s/%s: %s", repo.bucket, key, e)
-                success = False
-                continue
-
-        # Log summary
-        logging.info(
-            "Processed %d objects in s3://%s/%s", object_count, repo.bucket, base_path
+        loggit.info(
+            "Archiving repository %s (bucket: %s, path: %s) to %s",
+            repo.name,
+            repo.bucket,
+            base_path,
+            storage_class,
         )
-        if success:
-            logging.info("All objects successfully moved to GLACIER")
-        else:
-            logging.warning("Some objects failed to move to GLACIER")
 
-        return success
+        # Use the storage client's refreeze method which handles provider-specific
+        # archiving correctly (direct tier change for Azure/GCP, copy-in-place for AWS)
+        s3.refreeze(repo.bucket, base_path, storage_class)
 
-    except botocore.exceptions.ClientError as e:
-        logging.error("Failed to process bucket s3://%s: %s", repo.bucket, e)
+        loggit.info(
+            "Archive operation completed for repository %s",
+            repo.name,
+        )
+        return True
+
+    except Exception as e:
+        loggit.error(
+            "Failed to archive repository %s: %s",
+            repo.name,
+            e,
+            exc_info=True,
+        )
         return False
 
 
@@ -120,6 +102,53 @@ def get_all_indices_in_repo(client: Elasticsearch, repository: str) -> list:
         indices.update(snapshot["indices"])
 
     return list(indices)
+
+
+def repo_has_active_indices(client: Elasticsearch, repo_name: str) -> tuple[bool, list]:
+    """
+    Check if a repository has any active searchable snapshot indices using it.
+
+    This is used to determine if a repository can be safely archived/unmounted.
+    Elasticsearch won't allow unmounting a repo that has active indices.
+
+    :param client: A client connection object
+    :type client: Elasticsearch
+    :param repo_name: The repository name to check
+    :type repo_name: str
+
+    :returns: Tuple of (has_active_indices, list_of_index_names)
+    :rtype: tuple[bool, list]
+    """
+
+    active_indices = []
+
+    try:
+        # Get all index settings in one call and check which are searchable
+        # snapshots backed by this repo. Only the store.type/repository_name
+        # check is reliable — a naive name-substring match causes false
+        # positives and prevents archiving.
+        all_settings = client.indices.get_settings(index="*")
+        for index_name, data in all_settings.items():
+            store = (
+                data.get("settings", {})
+                .get("index", {})
+                .get("store", {})
+            )
+            if store.get("type") == "snapshot" and (
+                store.get("snapshot", {}).get("repository_name") == repo_name
+            ):
+                active_indices.append(index_name)
+
+    except Exception as e:
+        loggit.warning("Error checking for active indices in repo %s: %s", repo_name, e)
+
+    loggit.debug(
+        "Repository %s has %d active indices: %s",
+        repo_name,
+        len(active_indices),
+        active_indices[:5] if active_indices else [],
+    )
+    return len(active_indices) > 0, active_indices
 
 
 def get_timestamp_range(client: Elasticsearch, indices: list) -> tuple:
@@ -155,6 +184,10 @@ def get_timestamp_range(client: Elasticsearch, indices: list) -> tuple:
     filtered = [index for index in indices if client.indices.exists(index=index)]
     logging.debug("after removing non-existent indices: %s", len(filtered))
 
+    if not filtered:
+        logging.debug("No existing indices remain after filtering")
+        return None, None
+
     try:
         response = client.search(
             index=",".join(filtered), body=query, allow_partial_search_results=True
@@ -164,12 +197,18 @@ def get_timestamp_range(client: Elasticsearch, indices: list) -> tuple:
         logging.error("Error retrieving timestamp range: %s", e)
         return None, None
 
-    earliest = response["aggregations"]["earliest"]["value_as_string"]
-    latest = response["aggregations"]["latest"]["value_as_string"]
+    earliest_val = response["aggregations"]["earliest"].get("value_as_string")
+    latest_val = response["aggregations"]["latest"].get("value_as_string")
 
-    logging.debug("Earliest: %s, Latest: %s", earliest, latest)
+    if not earliest_val or not latest_val:
+        logging.debug(
+            "Aggregation returned null timestamps (indices may have no @timestamp data)"
+        )
+        return None, None
 
-    return datetime.fromisoformat(earliest), datetime.fromisoformat(latest)
+    logging.debug("Earliest: %s, Latest: %s", earliest_val, latest_val)
+
+    return datetime.fromisoformat(earliest_val), datetime.fromisoformat(latest_val)
 
 
 def ensure_settings_index(
@@ -190,7 +229,7 @@ def ensure_settings_index(
 
     :raises MissingIndexError: If the index doesn't exist and create_if_missing is False
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     if create_if_missing:
         if not client.indices.exists(index=STATUS_INDEX):
@@ -270,7 +309,7 @@ def get_settings(client: Elasticsearch) -> Settings:
         >>> get_settings(client)
         Settings(repo_name_prefix='deepfreeze', ...)
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     if not client.indices.exists(index=STATUS_INDEX):
         raise MissingIndexError(f"Status index {STATUS_INDEX} is missing")
     try:
@@ -299,7 +338,7 @@ def save_settings(client: Elasticsearch, settings: Settings) -> None:
 
     :raises ActionError: If the settings document cannot be created or updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     try:
         client.get(index=STATUS_INDEX, id=SETTINGS_ID)
         loggit.info("Settings document already exists, updating it")
@@ -317,43 +356,69 @@ def create_repo(
     base_path: str,
     canned_acl: str,
     storage_class: str,
+    provider: str = "aws",
     dry_run: bool = False,
 ) -> None:
     """
-    Creates a new repo using the previously-created bucket.
+    Creates a new repo using the previously-created bucket/container.
 
     :param client: A client connection object
     :type client: Elasticsearch
     :param repo_name: The name of the repository to create
     :type repo_name: str
-    :param bucket_name: The name of the bucket to use for the repository
+    :param bucket_name: The name of the bucket/container to use for the repository
     :type bucket_name: str
     :param base_path: Path within a bucket where snapshots are stored
     :type base_path: str
-    :param canned_acl: One of the AWS canned ACL values
+    :param canned_acl: One of the AWS canned ACL values (AWS only)
     :type canned_acl: str
-    :param storage_class: AWS Storage class
+    :param storage_class: Storage class (AWS only)
     :type storage_class: str
+    :param provider: Cloud provider (aws, azure, gcp)
+    :type provider: str
     :param dry_run: If True, do not actually create the repository
     :type dry_run: bool
 
     :raises ActionError: If the repository cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
-    loggit.info("Creating repo %s using bucket %s", repo_name, bucket_name)
+
+    loggit.info(
+        "Creating repo %s using bucket %s (provider: %s)",
+        repo_name,
+        bucket_name,
+        provider,
+    )
     if dry_run:
         return
+
+    # Build repository settings based on provider
+    if provider == "azure":
+        repo_type = "azure"
+        settings = {
+            "container": bucket_name,
+            "base_path": base_path,
+        }
+    elif provider == "gcp":
+        repo_type = "gcs"
+        settings = {
+            "bucket": bucket_name,
+            "base_path": base_path,
+        }
+    else:  # aws
+        repo_type = "s3"
+        settings = {
+            "bucket": bucket_name,
+            "base_path": base_path,
+            "canned_acl": canned_acl,
+            "storage_class": storage_class,
+        }
+
     try:
         client.snapshot.create_repository(
             name=repo_name,
             body={
-                "type": "s3",
-                "settings": {
-                    "bucket": bucket_name,
-                    "base_path": base_path,
-                    "canned_acl": canned_acl,
-                    "storage_class": storage_class,
-                },
+                "type": repo_type,
+                "settings": settings,
             },
         )
     except Exception as e:
@@ -414,7 +479,7 @@ def get_repository(client: Elasticsearch, name: str) -> Repository:
 
     :raises Exception: If the repository does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     logging.debug("Getting repository %s", name)
     try:
         doc = client.search(
@@ -523,7 +588,6 @@ def get_matching_repos(
         ]
         logging.debug("Mounted repos: %s", mounted_repos)
         return [Repository(**repo["_source"]) for repo in mounted_repos]
-    # return a Repository object for each
     return [Repository(**repo["_source"], docid=repo["_id"]) for repo in repos]
 
 
@@ -542,10 +606,13 @@ def unmount_repo(client: Elasticsearch, repo: str) -> Repository:
 
     :raises Exception: If the repository does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     # Get repository info from Elasticsearch
     repo_info = client.snapshot.get_repository(name=repo)[repo]
-    bucket = repo_info["settings"]["bucket"]
+    # Handle different providers: AWS/GCP use "bucket", Azure uses "container"
+    bucket = repo_info["settings"].get("bucket") or repo_info["settings"].get(
+        "container"
+    )
     base_path = repo_info["settings"]["base_path"]
 
     # Get repository object from status index
@@ -565,21 +632,21 @@ def unmount_repo(client: Elasticsearch, repo: str) -> Repository:
             repo_obj.end.isoformat() if repo_obj.end else "None",
         )
 
-    # Mark repository as unmounted
-    repo_obj.unmount()
-    msg = f"Recording repository details as {repo_obj}"
-    loggit.debug(msg)
-
     # Remove the repository from Elasticsearch
-    loggit.debug("Removing repo %s", repo)
+    loggit.debug("Removing repo %s from Elasticsearch", repo)
     try:
         client.snapshot.delete_repository(name=repo)
     except Exception as e:
         loggit.warning("Repository %s could not be unmounted due to %s", repo, e)
         loggit.warning("Another attempt will be made when rotate runs next")
+        # Don't mark as unmounted if the actual unmount failed
+        raise
+
+    # Only mark as unmounted AFTER successful ES unmount
+    repo_obj.unmount()
+    loggit.debug("Recording repository details as %s", repo_obj)
 
     # Update the status index with final repository state
-    loggit.debug("Updating repo: %s", repo_obj)
     client.update(index=STATUS_INDEX, doc=repo_obj.to_dict(), id=repo_obj.docid)
     loggit.debug("Repo %s removed", repo)
     return repo_obj
@@ -627,7 +694,7 @@ def create_ilm_policy(
 
     :raises ActionError: If the policy cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Creating ILM policy %s", policy_name)
     try:
         client.ilm.put_lifecycle(name=policy_name, body=policy_body)
@@ -648,7 +715,7 @@ def get_ilm_policy(client: Elasticsearch, policy_name: str) -> dict:
     :returns: The policy dictionary if found, None otherwise
     :rtype: dict | None
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting ILM policy %s", policy_name)
     try:
         policies = client.ilm.get_lifecycle(name=policy_name)
@@ -689,7 +756,7 @@ def create_or_update_ilm_policy(
 
     :raises ActionError: If the policy cannot be created or updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     # Define the default policy with reasonable tiering strategy
     default_policy_body = {
@@ -805,7 +872,7 @@ def update_index_template_ilm_policy(
 
     :raises ActionError: If the template cannot be updated
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info(
         "Updating index template %s to use ILM policy %s",
         template_name,
@@ -815,92 +882,85 @@ def update_index_template_ilm_policy(
     # First try composable templates (ES 7.8+)
     try:
         templates = client.indices.get_index_template(name=template_name)
-        if (
-            templates
-            and "index_templates" in templates
-            and len(templates["index_templates"]) > 0
-        ):
-            template_data = templates["index_templates"][0]["index_template"]
-            loggit.debug("Found composable template %s", template_name)
-
-            # Ensure template structure exists
-            if "template" not in template_data:
-                template_data["template"] = {}
-            if "settings" not in template_data["template"]:
-                template_data["template"]["settings"] = {}
-            if "index" not in template_data["template"]["settings"]:
-                template_data["template"]["settings"]["index"] = {}
-            if "lifecycle" not in template_data["template"]["settings"]["index"]:
-                template_data["template"]["settings"]["index"]["lifecycle"] = {}
-
-            # Get old policy name for logging
-            old_policy = template_data["template"]["settings"]["index"][
-                "lifecycle"
-            ].get("name", "none")
-
-            # Set the new ILM policy
-            template_data["template"]["settings"]["index"]["lifecycle"][
-                "name"
-            ] = ilm_policy_name
-
-            # Put the updated template
-            client.indices.put_index_template(name=template_name, body=template_data)
-            loggit.info(
-                "Updated composable template %s: ILM policy %s -> %s",
-                template_name,
-                old_policy,
-                ilm_policy_name,
-            )
-            return {
-                "action": "updated",
-                "template_type": "composable",
-                "old_policy": old_policy,
-                "new_policy": ilm_policy_name,
-            }
     except NotFoundError:
+        templates = None
         loggit.debug(
             "Composable template %s not found, trying legacy template", template_name
         )
     except Exception as e:
+        templates = None
         loggit.debug("Error checking composable template %s: %s", template_name, e)
+
+    if (
+        templates
+        and "index_templates" in templates
+        and len(templates["index_templates"]) > 0
+    ):
+        template_data = templates["index_templates"][0]["index_template"]
+        loggit.debug("Found composable template %s", template_name)
+
+        # Ensure template structure exists
+        if "template" not in template_data:
+            template_data["template"] = {}
+        if "settings" not in template_data["template"]:
+            template_data["template"]["settings"] = {}
+        if "index" not in template_data["template"]["settings"]:
+            template_data["template"]["settings"]["index"] = {}
+        if "lifecycle" not in template_data["template"]["settings"]["index"]:
+            template_data["template"]["settings"]["index"]["lifecycle"] = {}
+
+        # Get old policy name for logging
+        old_policy = template_data["template"]["settings"]["index"]["lifecycle"].get(
+            "name", "none"
+        )
+
+        # Set the new ILM policy
+        template_data["template"]["settings"]["index"]["lifecycle"]["name"] = (
+            ilm_policy_name
+        )
+
+        # Only include fields accepted by put_index_template to avoid
+        # sending system-managed fields (e.g. created_date) from the GET response
+        _COMPOSABLE_TEMPLATE_FIELDS = {
+            "index_patterns",
+            "template",
+            "composed_of",
+            "priority",
+            "version",
+            "_meta",
+            "data_stream",
+            "allow_auto_create",
+            "deprecated",
+            "ignore_missing_component_templates",
+        }
+        put_body = {
+            k: v for k, v in template_data.items() if k in _COMPOSABLE_TEMPLATE_FIELDS
+        }
+
+        # Put the updated template
+        try:
+            client.indices.put_index_template(name=template_name, body=put_body)
+        except Exception as e:
+            loggit.error("Error updating composable template %s: %s", template_name, e)
+            raise ActionError(
+                f"Failed to update composable template {template_name}: {e}"
+            ) from e
+        loggit.info(
+            "Updated composable template %s: ILM policy %s -> %s",
+            template_name,
+            old_policy,
+            ilm_policy_name,
+        )
+        return {
+            "action": "updated",
+            "template_type": "composable",
+            "old_policy": old_policy,
+            "new_policy": ilm_policy_name,
+        }
 
     # Try legacy templates
     try:
         templates = client.indices.get_template(name=template_name)
-        if templates and template_name in templates:
-            template_data = templates[template_name]
-            loggit.debug("Found legacy template %s", template_name)
-
-            # Ensure template structure exists
-            if "settings" not in template_data:
-                template_data["settings"] = {}
-            if "index" not in template_data["settings"]:
-                template_data["settings"]["index"] = {}
-            if "lifecycle" not in template_data["settings"]["index"]:
-                template_data["settings"]["index"]["lifecycle"] = {}
-
-            # Get old policy name for logging
-            old_policy = template_data["settings"]["index"]["lifecycle"].get(
-                "name", "none"
-            )
-
-            # Set the new ILM policy
-            template_data["settings"]["index"]["lifecycle"]["name"] = ilm_policy_name
-
-            # Put the updated template
-            client.indices.put_template(name=template_name, body=template_data)
-            loggit.info(
-                "Updated legacy template %s: ILM policy %s -> %s",
-                template_name,
-                old_policy,
-                ilm_policy_name,
-            )
-            return {
-                "action": "updated",
-                "template_type": "legacy",
-                "old_policy": old_policy,
-                "new_policy": ilm_policy_name,
-            }
     except NotFoundError:
         loggit.warning(
             "Template %s not found (checked both composable and legacy)", template_name
@@ -911,8 +971,49 @@ def update_index_template_ilm_policy(
             "error": f"Template {template_name} not found",
         }
     except Exception as e:
-        loggit.error("Error updating legacy template %s: %s", template_name, e)
-        raise ActionError(f"Failed to update template {template_name}: {e}") from e
+        loggit.error("Error checking legacy template %s: %s", template_name, e)
+        raise ActionError(
+            f"Failed to check legacy template {template_name}: {e}"
+        ) from e
+
+    if templates and template_name in templates:
+        template_data = templates[template_name]
+        loggit.debug("Found legacy template %s", template_name)
+
+        # Ensure template structure exists
+        if "settings" not in template_data:
+            template_data["settings"] = {}
+        if "index" not in template_data["settings"]:
+            template_data["settings"]["index"] = {}
+        if "lifecycle" not in template_data["settings"]["index"]:
+            template_data["settings"]["index"]["lifecycle"] = {}
+
+        # Get old policy name for logging
+        old_policy = template_data["settings"]["index"]["lifecycle"].get("name", "none")
+
+        # Set the new ILM policy
+        template_data["settings"]["index"]["lifecycle"]["name"] = ilm_policy_name
+
+        # Put the updated template
+        try:
+            client.indices.put_template(name=template_name, body=template_data)
+        except Exception as e:
+            loggit.error("Error updating legacy template %s: %s", template_name, e)
+            raise ActionError(
+                f"Failed to update legacy template {template_name}: {e}"
+            ) from e
+        loggit.info(
+            "Updated legacy template %s: ILM policy %s -> %s",
+            template_name,
+            old_policy,
+            ilm_policy_name,
+        )
+        return {
+            "action": "updated",
+            "template_type": "legacy",
+            "old_policy": old_policy,
+            "new_policy": ilm_policy_name,
+        }
 
 
 def create_thawed_ilm_policy(client: Elasticsearch, repo_name: str) -> str:
@@ -930,7 +1031,7 @@ def create_thawed_ilm_policy(client: Elasticsearch, repo_name: str) -> str:
     :returns: The created policy name
     :rtype: str
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     policy_name = f"{repo_name}-thawed"
     policy_body = {
@@ -990,7 +1091,7 @@ def update_repository_date_range(client: Elasticsearch, repo: Repository) -> boo
     :returns: True if dates were updated, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Updating date range for repository %s (mounted: %s)",
         repo.name,
@@ -1018,6 +1119,19 @@ def update_repository_date_range(client: Elasticsearch, repo: Repository) -> boo
             # Find which indices are actually mounted (try multiple naming patterns)
             mounted_indices = []
             for idx in snapshot_indices:
+                # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
+                # but mounted indices use the original name. Strip that prefix.
+                # Pattern: fm-clone-<random>-<original-name> -> <original-name>
+                if idx.startswith("fm-clone-"):
+                    # Find the second hyphen (after random chars) and strip prefix
+                    parts = idx.split("-", 3)  # ['fm', 'clone', 'random', 'rest']
+                    if len(parts) >= 4:
+                        original_idx = parts[3]  # Everything after fm-clone-xxxx-
+                        loggit.debug(
+                            "Stripped fm-clone prefix: %s -> %s", idx, original_idx
+                        )
+                        idx = original_idx
+
                 # Try original name
                 if client.indices.exists(index=idx):
                     mounted_indices.append(idx)
@@ -1129,7 +1243,7 @@ def find_repos_by_date_range(
 
     :raises Exception: If the status index does not exist
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Finding repositories with data between %s and %s",
         start.isoformat(),
@@ -1178,7 +1292,7 @@ def check_restore_status(s3: S3Client, bucket: str, base_path: str) -> dict:
     :returns: A dictionary with restoration status information
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Checking restore status for s3://%s/%s", bucket, base_path)
 
     # Normalize base_path
@@ -1298,24 +1412,49 @@ def mount_repo(client: Elasticsearch, repo: Repository) -> None:
 
     :raises ActionError: If the repository cannot be created
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Mounting repository %s", repo.name)
 
-    # Get settings to retrieve canned_acl and storage_class
+    # Get settings to retrieve provider and storage settings
     settings = get_settings(client)
+    provider = settings.provider
+
+    # Build repository settings based on provider
+    if provider == "azure":
+        repo_type = "azure"
+        repo_settings = {
+            "container": repo.bucket,
+            "base_path": repo.base_path,
+        }
+    elif provider == "gcp":
+        repo_type = "gcs"
+        repo_settings = {
+            "bucket": repo.bucket,
+            "base_path": repo.base_path,
+        }
+    else:  # aws (default)
+        repo_type = "s3"
+        repo_settings = {
+            "bucket": repo.bucket,
+            "base_path": repo.base_path,
+            "canned_acl": settings.canned_acl,
+            "storage_class": settings.storage_class,
+        }
+
+    loggit.debug(
+        "Mounting repository %s with type=%s, settings=%s",
+        repo.name,
+        repo_type,
+        repo_settings,
+    )
 
     # Create the repository in Elasticsearch
     try:
         client.snapshot.create_repository(
             name=repo.name,
             body={
-                "type": "s3",
-                "settings": {
-                    "bucket": repo.bucket,
-                    "base_path": repo.base_path,
-                    "canned_acl": settings.canned_acl,
-                    "storage_class": settings.storage_class,
-                },
+                "type": repo_type,
+                "settings": repo_settings,
             },
         )
         loggit.info("Repository %s created successfully", repo.name)
@@ -1359,7 +1498,7 @@ def save_thaw_request(
 
     :raises ActionError: If the request cannot be saved
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Saving thaw request %s", request_id)
 
     request_doc = {
@@ -1397,7 +1536,7 @@ def get_thaw_request(client: Elasticsearch, request_id: str) -> dict:
 
     :raises ActionError: If the request is not found
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Retrieving thaw request %s", request_id)
 
     try:
@@ -1423,7 +1562,7 @@ def list_thaw_requests(client: Elasticsearch) -> list:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Listing all thaw requests")
 
     query = {"query": {"term": {"doctype": "thaw_request"}}, "size": 10000}
@@ -1461,7 +1600,7 @@ def update_thaw_request(
 
     :raises ActionError: If the update fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Updating thaw request %s", request_id)
 
     update_doc = {}
@@ -1491,7 +1630,7 @@ def get_repositories_by_names(client: Elasticsearch, repo_names: list) -> list:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting repositories by names: %s", repo_names)
 
     if not repo_names:
@@ -1534,7 +1673,7 @@ def get_index_templates(client: Elasticsearch) -> dict:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting legacy index templates")
     try:
         return client.indices.get_template()
@@ -1555,7 +1694,7 @@ def get_composable_templates(client: Elasticsearch) -> dict:
 
     :raises ActionError: If the query fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Getting composable index templates")
     try:
         return client.indices.get_index_template()
@@ -1590,7 +1729,7 @@ def update_template_ilm_policy(
 
     :raises ActionError: If the update fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Updating template %s from policy %s to %s",
         template_name,
@@ -1625,11 +1764,29 @@ def update_template_ilm_policy(
                 if "lifecycle" not in template["template"]["settings"]["index"]:
                     template["template"]["settings"]["index"]["lifecycle"] = {}
 
-                template["template"]["settings"]["index"]["lifecycle"][
-                    "name"
-                ] = new_policy_name
+                template["template"]["settings"]["index"]["lifecycle"]["name"] = (
+                    new_policy_name
+                )
 
-                client.indices.put_index_template(name=template_name, body=template)
+                # Only include fields accepted by put_index_template to avoid
+                # sending system-managed fields (e.g. created_date) from the GET response
+                _COMPOSABLE_FIELDS = {
+                    "index_patterns",
+                    "template",
+                    "composed_of",
+                    "priority",
+                    "version",
+                    "_meta",
+                    "data_stream",
+                    "allow_auto_create",
+                    "deprecated",
+                    "ignore_missing_component_templates",
+                }
+                put_body = {
+                    k: v for k, v in template.items() if k in _COMPOSABLE_FIELDS
+                }
+
+                client.indices.put_index_template(name=template_name, body=put_body)
                 loggit.info(
                     "Updated composable template %s to use policy %s",
                     template_name,
@@ -1701,7 +1858,7 @@ def create_versioned_ilm_policy(
 
     :raises ActionError: If policy creation fails
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     new_policy_name = f"{base_policy_name}-{suffix}"
 
@@ -1749,7 +1906,7 @@ def get_policies_for_repo(client: Elasticsearch, repo_name: str) -> dict:
     :returns: Dictionary of policy names to policy bodies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Finding policies that reference repository %s", repo_name)
 
     policies = client.ilm.get_lifecycle()
@@ -1790,7 +1947,7 @@ def get_policies_by_suffix(client: Elasticsearch, suffix: str) -> dict:
     :returns: Dictionary of policy names to policy bodies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Finding policies ending with suffix -%s", suffix)
 
     policies = client.ilm.get_lifecycle()
@@ -1819,7 +1976,7 @@ def is_policy_safe_to_delete(client: Elasticsearch, policy_name: str) -> bool:
     :returns: True if safe to delete, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Checking if policy %s is safe to delete", policy_name)
 
     try:
@@ -1873,7 +2030,7 @@ def find_snapshots_for_index(
     :returns: List of snapshot names containing the index
     :rtype: list[str]
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug(
         "Finding snapshots containing index %s in repo %s", index_name, repo_name
     )
@@ -1925,42 +2082,64 @@ def mount_snapshot_index(
     :returns: True if successful, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
+
+    # ILM force-merge creates snapshots with fm-clone-xxxx- prefix,
+    # but mounted indices should use the original name. We need to use
+    # the original index name (with prefix) to mount from the snapshot,
+    # but the stripped name for the mounted index.
+    # Pattern: fm-clone-<random>-<original-name> -> <original-name>
+    original_index_name = index_name
+    mounted_index_name = index_name
+    if index_name.startswith("fm-clone-"):
+        # Find the second hyphen (after random chars) and strip prefix
+        parts = index_name.split("-", 3)  # ['fm', 'clone', 'random', 'rest']
+        if len(parts) >= 4:
+            mounted_index_name = parts[3]  # Everything after fm-clone-xxxx-
+            loggit.debug(
+                "Stripped fm-clone prefix: %s -> %s",
+                original_index_name,
+                mounted_index_name,
+            )
+
     loggit.info(
-        "Mounting index %s from snapshot %s/%s", index_name, repo_name, snapshot_name
+        "Mounting index %s from snapshot %s/%s",
+        mounted_index_name,
+        repo_name,
+        snapshot_name,
     )
 
     # Check if index is already mounted
-    already_mounted = client.indices.exists(index=index_name)
+    already_mounted = client.indices.exists(index=mounted_index_name)
     if already_mounted:
-        loggit.info("Index %s is already mounted", index_name)
+        loggit.info("Index %s is already mounted", mounted_index_name)
         if ilm_policy:
             try:
                 loggit.debug(
                     "Removing old ILM policy from %s before assigning new policy",
-                    index_name,
+                    mounted_index_name,
                 )
                 try:
-                    client.ilm.remove_policy(index=index_name)
+                    client.ilm.remove_policy(index=mounted_index_name)
                 except Exception as remove_err:
                     loggit.debug(
                         "Could not remove ILM policy from %s (may not have one): %s",
-                        index_name,
+                        mounted_index_name,
                         remove_err,
                     )
 
                 client.indices.put_settings(
-                    index=index_name, body={"index.lifecycle.name": ilm_policy}
+                    index=mounted_index_name, body={"index.lifecycle.name": ilm_policy}
                 )
                 loggit.info(
                     "Assigned ILM policy %s to already-mounted index %s",
                     ilm_policy,
-                    index_name,
+                    mounted_index_name,
                 )
             except Exception as e:
                 loggit.warning(
                     "Failed to assign ILM policy to already-mounted index %s: %s",
-                    index_name,
+                    mounted_index_name,
                     e,
                 )
         return True
@@ -1969,40 +2148,43 @@ def mount_snapshot_index(
         client.searchable_snapshots.mount(
             repository=repo_name,
             snapshot=snapshot_name,
-            body={"index": index_name},
+            body={
+                "index": original_index_name,  # The index name in the snapshot (with fm-clone prefix)
+                "renamed_index": mounted_index_name,  # The name for the mounted index (without prefix)
+            },
         )
-        loggit.info("Successfully mounted index %s", index_name)
+        loggit.info("Successfully mounted index %s", mounted_index_name)
 
         if ilm_policy:
             try:
                 loggit.debug(
                     "Removing old ILM policy from %s before assigning new policy",
-                    index_name,
+                    mounted_index_name,
                 )
                 try:
-                    client.ilm.remove_policy(index=index_name)
+                    client.ilm.remove_policy(index=mounted_index_name)
                 except Exception as remove_err:
                     loggit.debug(
                         "Could not remove ILM policy from %s (may not have one): %s",
-                        index_name,
+                        mounted_index_name,
                         remove_err,
                     )
 
                 client.indices.put_settings(
-                    index=index_name, body={"index.lifecycle.name": ilm_policy}
+                    index=mounted_index_name, body={"index.lifecycle.name": ilm_policy}
                 )
                 loggit.info(
-                    "Assigned ILM policy %s to index %s", ilm_policy, index_name
+                    "Assigned ILM policy %s to index %s", ilm_policy, mounted_index_name
                 )
             except Exception as e:
                 loggit.warning(
-                    "Failed to assign ILM policy to index %s: %s", index_name, e
+                    "Failed to assign ILM policy to index %s: %s", mounted_index_name, e
                 )
 
         return True
 
     except Exception as e:
-        loggit.error("Failed to mount index %s: %s", index_name, e)
+        loggit.error("Failed to mount index %s: %s", mounted_index_name, e)
         return False
 
 
@@ -2022,7 +2204,7 @@ def wait_for_index_ready(
     :returns: True if index is ready, False if timeout
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.debug("Waiting for index %s to be ready", index_name)
 
     start_time = time.time()
@@ -2061,7 +2243,7 @@ def get_index_datastream_name(client: Elasticsearch, index_name: str) -> str:
     :returns: The data stream name if the index was part of one, None otherwise
     :rtype: str
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
 
     try:
         settings = client.indices.get_settings(index=index_name)
@@ -2120,7 +2302,7 @@ def add_index_to_datastream(
     :returns: True if successful, False otherwise
     :rtype: bool
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info("Adding index %s to data stream %s", index_name, datastream_name)
 
     try:
@@ -2181,7 +2363,7 @@ def find_and_mount_indices_in_date_range(
     :returns: Dictionary with mounted, skipped, failed counts, and created policies
     :rtype: dict
     """
-    loggit = logging.getLogger("deepfreeze.utilities")
+
     loggit.info(
         "Finding and mounting indices between %s and %s",
         start_date.isoformat(),
@@ -2219,27 +2401,35 @@ def find_and_mount_indices_in_date_range(
 
                 snapshot_name = snapshots[-1]
 
-                already_mounted = client.indices.exists(index=index_name)
+                # mount_snapshot_index will handle fm-clone prefix stripping internally
+                # Determine the mounted index name (with or without prefix stripping)
+                if index_name.startswith("fm-clone-"):
+                    parts = index_name.split("-", 3)
+                    mounted_name = parts[3] if len(parts) >= 4 else index_name
+                else:
+                    mounted_name = index_name
+
+                already_mounted = client.indices.exists(index=mounted_name)
                 if already_mounted:
                     loggit.debug(
                         "Index %s is already mounted, skipping mount operation",
-                        index_name,
+                        mounted_name,
                     )
                     if thawed_policy and not mount_snapshot_index(
                         client, repo.name, snapshot_name, index_name, thawed_policy
                     ):
                         loggit.warning(
                             "Failed to assign ILM policy to already-mounted index %s",
-                            index_name,
+                            mounted_name,
                         )
                 else:
                     if not mount_snapshot_index(
                         client, repo.name, snapshot_name, index_name, thawed_policy
                     ):
-                        failed_indices.append(index_name)
+                        failed_indices.append(mounted_name)
                         continue
 
-                    if not wait_for_index_ready(client, index_name):
+                    if not wait_for_index_ready(client, mounted_name):
                         loggit.warning(
                             "Index %s did not become ready in time, may have query issues",
                             index_name,
@@ -2248,7 +2438,7 @@ def find_and_mount_indices_in_date_range(
                 keep_mounted = True
 
                 try:
-                    index_start, index_end = get_timestamp_range(client, [index_name])
+                    index_start, index_end = get_timestamp_range(client, [mounted_name])
 
                     if index_start and index_end:
                         index_start_dt = decode_date(index_start)
@@ -2257,61 +2447,63 @@ def find_and_mount_indices_in_date_range(
                         if index_start_dt <= end_date and index_end_dt >= start_date:
                             loggit.info(
                                 "Index %s overlaps date range (%s to %s), keeping mounted",
-                                index_name,
+                                mounted_name,
                                 index_start_dt.isoformat(),
                                 index_end_dt.isoformat(),
                             )
                         else:
                             loggit.info(
                                 "Index %s does not overlap date range (%s to %s), unmounting",
-                                index_name,
+                                mounted_name,
                                 index_start_dt.isoformat(),
                                 index_end_dt.isoformat(),
                             )
                             keep_mounted = False
                             try:
-                                client.indices.delete(index=index_name)
-                                loggit.debug("Unmounted index %s", index_name)
+                                client.indices.delete(index=mounted_name)
+                                loggit.debug("Unmounted index %s", mounted_name)
                             except Exception as e:
                                 loggit.warning(
-                                    "Failed to unmount index %s: %s", index_name, e
+                                    "Failed to unmount index %s: %s", mounted_name, e
                                 )
-                            skipped_indices.append(index_name)
+                            skipped_indices.append(mounted_name)
                     else:
                         loggit.warning(
                             "Could not determine date range for %s, keeping mounted",
-                            index_name,
+                            mounted_name,
                         )
 
                 except Exception as e:
                     loggit.warning(
                         "Error checking date range for index %s: %s, keeping mounted",
-                        index_name,
+                        mounted_name,
                         e,
                     )
 
                 if keep_mounted:
-                    mounted_indices.append(index_name)
+                    mounted_indices.append(mounted_name)
 
-                    datastream_name = get_index_datastream_name(client, index_name)
+                    datastream_name = get_index_datastream_name(client, mounted_name)
                     if datastream_name:
                         loggit.info(
                             "Index %s was part of data stream %s, attempting to re-add",
-                            index_name,
+                            mounted_name,
                             datastream_name,
                         )
-                        if add_index_to_datastream(client, datastream_name, index_name):
+                        if add_index_to_datastream(
+                            client, datastream_name, mounted_name
+                        ):
                             datastream_adds["successful"].append(
-                                {"index": index_name, "datastream": datastream_name}
+                                {"index": mounted_name, "datastream": datastream_name}
                             )
                         else:
                             datastream_adds["failed"].append(
-                                {"index": index_name, "datastream": datastream_name}
+                                {"index": mounted_name, "datastream": datastream_name}
                             )
                     else:
                         loggit.debug(
                             "Index %s is not a data stream backing index, skipping data stream step",
-                            index_name,
+                            mounted_name,
                         )
 
         except Exception as e:

@@ -5,9 +5,20 @@ Core library for Elasticsearch S3 Glacier archival operations.
 This package is shared between the standalone deepfreeze CLI and curator.
 """
 
-__version__ = "1.0.1"
+__version__ = "2.0.0"
 
 # Export constants
+from deepfreeze_core.constants import (
+    AUDIT_INDEX,
+    PROVIDERS,
+    SETTINGS_ID,
+    STATUS_INDEX,
+    THAW_STATE_EXPIRED,
+    THAW_STATE_FROZEN,
+    THAW_STATE_THAWED,
+    THAW_STATE_THAWING,
+)
+
 # Export actions
 from deepfreeze_core.actions import (
     Cleanup,
@@ -18,22 +29,15 @@ from deepfreeze_core.actions import (
     Status,
     Thaw,
 )
-from deepfreeze_core.constants import (
-    PROVIDERS,
-    SETTINGS_ID,
-    STATUS_INDEX,
-    THAW_STATE_EXPIRED,
-    THAW_STATE_FROZEN,
-    THAW_STATE_THAWED,
-    THAW_STATE_THAWING,
-)
 
 # Export ES client utilities
 from deepfreeze_core.esclient import (
     ESClientWrapper,
     create_es_client,
     create_es_client_from_config,
+    get_storage_credentials,
     load_config_from_yaml,
+    load_storage_config,
     validate_connection,
 )
 
@@ -55,12 +59,32 @@ from deepfreeze_core.helpers import (
     Settings,
 )
 
+# Export audit logging
+from deepfreeze_core.audit import (
+    AUDIT_INDEX,
+    ActionTracker,
+    AuditLogger,
+    ensure_audit_index,
+)
+
 # Export S3 client
 from deepfreeze_core.s3client import (
     AwsS3Client,
     S3Client,
     s3_client_factory,
 )
+
+# Conditional Azure export (azure-storage-blob is optional)
+try:
+    from deepfreeze_core.azure_client import AzureBlobClient
+except ImportError:
+    AzureBlobClient = None  # type: ignore[misc,assignment]
+
+# Conditional GCP export (google-cloud-storage is optional)
+try:
+    from deepfreeze_core.gcp_client import GcpStorageClient
+except ImportError:
+    GcpStorageClient = None  # type: ignore[misc,assignment]
 
 # Export commonly used utilities
 from deepfreeze_core.utilities import (
@@ -91,6 +115,7 @@ __all__ = [
     # Version
     "__version__",
     # Constants
+    "AUDIT_INDEX",
     "PROVIDERS",
     "SETTINGS_ID",
     "STATUS_INDEX",
@@ -110,15 +135,23 @@ __all__ = [
     "Deepfreeze",
     "Repository",
     "Settings",
+    # Audit
+    "ActionTracker",
+    "AuditLogger",
+    "ensure_audit_index",
     # S3 Client
     "AwsS3Client",
+    "AzureBlobClient",
+    "GcpStorageClient",
     "S3Client",
     "s3_client_factory",
     # ES Client
     "ESClientWrapper",
     "create_es_client",
     "create_es_client_from_config",
+    "get_storage_credentials",
     "load_config_from_yaml",
+    "load_storage_config",
     "validate_connection",
     # Actions
     "Cleanup",

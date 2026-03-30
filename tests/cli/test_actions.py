@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.console import Console
 from deepfreeze import (
     Cleanup,
     MissingIndexError,
@@ -280,6 +281,53 @@ class TestRotateAction:
 
                     assert new_suffix == "000006"
                     assert new_repo == "deepfreeze-000006"
+
+
+    def test_update_date_ranges_calls_for_each_mounted_repo(self):
+        """Test _update_date_ranges calls update_repository_date_range for each mounted repo"""
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+
+        mock_settings = Settings(
+            repo_name_prefix="deepfreeze",
+            bucket_name_prefix="deepfreeze",
+            base_path_prefix="snapshots",
+            style="oneup",
+            last_suffix="000001",
+        )
+
+        repo1 = Repository(name="deepfreeze-000001", bucket="bucket1", is_mounted=True)
+        repo2 = Repository(name="deepfreeze-000002", bucket="bucket2", is_mounted=True)
+
+        with patch("deepfreeze_core.actions.rotate.get_settings") as mock_get:
+            mock_get.return_value = mock_settings
+
+            with patch(
+                "deepfreeze_core.actions.rotate.s3_client_factory"
+            ) as mock_factory:
+                mock_s3 = MagicMock()
+                mock_factory.return_value = mock_s3
+
+                with patch(
+                    "deepfreeze_core.actions.rotate.get_matching_repos"
+                ) as mock_repos:
+                    mock_repos.return_value = [repo1, repo2]
+
+                    with patch(
+                        "deepfreeze_core.actions.rotate.update_repository_date_range"
+                    ) as mock_update:
+                        # First repo updated, second repo unchanged
+                        mock_update.side_effect = [True, False]
+
+                        rotate = Rotate(client=mock_client, porcelain=True)
+                        rotate._load_settings()
+
+                        updated = rotate._update_date_ranges()
+
+                        assert mock_update.call_count == 2
+                        mock_update.assert_any_call(mock_client, repo1)
+                        mock_update.assert_any_call(mock_client, repo2)
+                        assert updated == ["deepfreeze-000001"]
 
 
 class TestThawAction:
@@ -575,7 +623,8 @@ class TestRepairMetadataAction:
                     repair = RepairMetadata(client=mock_client, porcelain=True)
                     repair.do_dry_run()
 
-                    mock_repos.assert_called_once()
+                    # Called twice: once for state scan, once for date range update
+                    assert mock_repos.call_count == 2
 
 
 class TestActionInterfaceConsistency:
@@ -677,6 +726,93 @@ class TestSetupActionAdditional:
 
 class TestStatusActionAdditional:
     """Additional tests for Status action (Task Group 18)"""
+
+    def test_status_rich_output_date_only(self):
+        """Test Status rich output truncates dates when show_time is False"""
+        status = Status(
+            client=MagicMock(),
+            porcelain=False,
+            show_repos=True,
+            show_thawed=True,
+            show_buckets=False,
+            show_ilm=False,
+            show_config=False,
+        )
+        status.console = Console(stderr=True, record=True, width=200)
+
+        repos = [
+            {
+                "name": "repo-1",
+                "bucket": "bucket-1",
+                "base_path": "path",
+                "start": "2024-01-01T00:00:00+00:00",
+                "end": "2024-01-31T23:59:59+00:00",
+                "is_mounted": True,
+                "thaw_state": "frozen",
+                "storage_tier": "Archive",
+            }
+        ]
+        thaw_requests = [
+            {
+                "request_id": "req-1",
+                "status": "completed",
+                "start_date": "2024-01-01T00:00:00+00:00",
+                "end_date": "2024-01-31T23:59:59+00:00",
+                "repos": ["repo-1"],
+                "created_at": "2024-02-01T12:34:56+00:00",
+            }
+        ]
+
+        status._display_rich(repos, thaw_requests, buckets=[], ilm_policies=[])
+
+        output = status.console.export_text()
+        assert "2024-01-01 - 2024-01-31" in output
+        assert "2024-02-01 12:34" in output
+        assert "2024-01-01 00:00:00+00:00" not in output
+        assert "2024-02-01 12:34:56+00:00" not in output
+
+    def test_status_rich_output_with_time(self):
+        """Test Status rich output shows full datetime when show_time is True"""
+        status = Status(
+            client=MagicMock(),
+            porcelain=False,
+            show_repos=True,
+            show_thawed=True,
+            show_buckets=False,
+            show_ilm=False,
+            show_config=False,
+            show_time=True,
+        )
+        status.console = Console(stderr=True, record=True, width=200)
+
+        repos = [
+            {
+                "name": "repo-1",
+                "bucket": "bucket-1",
+                "base_path": "path",
+                "start": "2024-01-01T00:00:00+00:00",
+                "end": "2024-01-31T23:59:59+00:00",
+                "is_mounted": True,
+                "thaw_state": "frozen",
+                "storage_tier": "Archive",
+            }
+        ]
+        thaw_requests = [
+            {
+                "request_id": "req-1",
+                "status": "completed",
+                "start_date": "2024-01-01T00:00:00+00:00",
+                "end_date": "2024-01-31T23:59:59+00:00",
+                "repos": ["repo-1"],
+                "created_at": "2024-02-01T12:34:56+00:00",
+            }
+        ]
+
+        status._display_rich(repos, thaw_requests, buckets=[], ilm_policies=[])
+
+        output = status.console.export_text()
+        assert "2024-01-01 00:00:00+00:00 - 2024-01-31 23:59:59+00:00" in output
+        assert "2024-02-01 12:34:56+00:00" in output
 
     def test_status_porcelain_mode(self):
         """Test Status with porcelain=True produces machine-readable output"""

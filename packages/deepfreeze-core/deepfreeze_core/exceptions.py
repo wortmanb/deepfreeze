@@ -33,8 +33,15 @@ class ActionException(DeepfreezeException):
 
 class PreconditionError(DeepfreezeException):
     """
-    Exception raised when preconditions are not met for a deepfreeze action
+    Exception raised when preconditions are not met for a deepfreeze action.
+
+    The `issues` attribute carries a list of plain-text issue descriptions
+    so callers (CLI, server API) can surface the details.
     """
+
+    def __init__(self, message: str, issues: list[str] | None = None):
+        super().__init__(message)
+        self.issues = issues or []
 
 
 class RepositoryException(DeepfreezeException):
