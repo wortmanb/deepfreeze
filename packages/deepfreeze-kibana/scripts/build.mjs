@@ -26,19 +26,20 @@ mkdirSync(TARGET, { recursive: true });
 // -- Step 1: Compile server + common TypeScript --
 console.log('  Compiling server + common TypeScript...');
 
+// Write tsconfig in the plugin root (not build/) so relative paths work
 const tsConfig = {
   compilerOptions: {
     target: 'ES2020',
     module: 'commonjs',
     moduleResolution: 'node',
-    outDir: resolve(TARGET),
-    rootDir: resolve(ROOT),
+    outDir: './build/kibana/deepfreeze',
+    rootDir: '.',
     declaration: false,
     strict: false,
     esModuleInterop: true,
     skipLibCheck: true,
     resolveJsonModule: true,
-    baseUrl: resolve(ROOT),
+    baseUrl: '.',
     paths: {
       '@kbn/core/server': ['./typestubs/core/server'],
       '@kbn/core/public': ['./typestubs/core/public'],
@@ -47,17 +48,19 @@ const tsConfig = {
     },
   },
   include: [
-    resolve(ROOT, 'server', '**', '*.ts'),
-    resolve(ROOT, 'common', '**', '*.ts'),
+    'server/**/*.ts',
+    'common/**/*.ts',
   ],
   exclude: [
-    resolve(ROOT, 'typestubs', '**'),
+    'typestubs/**',
+    'build/**',
+    'node_modules/**',
   ],
 };
-writeFileSync(resolve(BUILD, 'tsconfig.build.json'), JSON.stringify(tsConfig, null, 2));
+writeFileSync(resolve(ROOT, 'tsconfig.build.json'), JSON.stringify(tsConfig, null, 2));
 
 try {
-  execSync(`npx tsc -p ${resolve(BUILD, 'tsconfig.build.json')}`, { stdio: 'inherit', cwd: ROOT });
+  execSync('npx tsc -p tsconfig.build.json', { stdio: 'inherit', cwd: ROOT });
 } catch {
   console.error('Server/common compilation failed');
   process.exit(1);
