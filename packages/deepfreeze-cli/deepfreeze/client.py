@@ -1,6 +1,5 @@
 """HTTP client for communicating with a remote deepfreeze-server."""
 
-import json
 from typing import Any
 
 import httpx
