@@ -18,6 +18,9 @@ import type {
   ServiceReady,
 } from '../../common/types';
 
+// Re-export types for page imports
+export type { SystemStatus, CommandResult, RestoreProgress, AuditEntry, ActionHistoryEntry, ScheduledJob };
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json', 'kbn-xsrf': 'true', ...options?.headers },
