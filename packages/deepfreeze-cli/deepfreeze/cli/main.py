@@ -165,6 +165,22 @@ def cli(ctx, config_path, dry_run, local, server_url):
         ctx.exit(1)
 
 
+def display_remote_result(result: dict, porcelain: bool = False) -> bool:
+    """Display a remote API result, handling both completed and 202 job responses.
+
+    Returns True if the action was successful (or still running), False on failure.
+    """
+    from deepfreeze.cli.display import display_command_result, display_job_submitted
+
+    if "job_id" in result or "id" in result and "action" not in result:
+        # Server returned a 202 job-submitted response (still running)
+        display_job_submitted(result)
+        return True
+    else:
+        display_command_result(result, porcelain=porcelain)
+        return result.get("success", False)
+
+
 def get_audit_from_context(ctx):
     """Get or create an AuditLogger from the CLI context."""
     if "audit" not in ctx.obj or ctx.obj["audit"] is None:
@@ -465,11 +481,9 @@ def rotate(
     """
     remote = ctx.obj.get("remote_client")
     if remote:
-        from deepfreeze.cli.display import display_command_result
         try:
             result = remote.rotate(year=year, month=month, keep=keep, dry_run=ctx.obj["dry_run"])
-            display_command_result(result, porcelain=porcelain)
-            if not result.get("success", False):
+            if not display_remote_result(result, porcelain=porcelain):
                 ctx.exit(1)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -658,14 +672,12 @@ def cleanup(
     """
     remote = ctx.obj.get("remote_client")
     if remote:
-        from deepfreeze.cli.display import display_command_result
         try:
             result = remote.cleanup(
                 refrozen_retention_days=refrozen_retention_days,
                 dry_run=ctx.obj["dry_run"],
             )
-            display_command_result(result, porcelain=porcelain)
-            if not result.get("success", False):
+            if not display_remote_result(result, porcelain=porcelain):
                 ctx.exit(1)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -742,14 +754,12 @@ def refreeze(
     """
     remote = ctx.obj.get("remote_client")
     if remote:
-        from deepfreeze.cli.display import display_command_result
         try:
             result = remote.refreeze(
                 request_id=thaw_request_id,
                 dry_run=ctx.obj["dry_run"],
             )
-            display_command_result(result, porcelain=porcelain)
-            if not result.get("success", False):
+            if not display_remote_result(result, porcelain=porcelain):
                 ctx.exit(1)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -959,8 +969,7 @@ def thaw(
                 # Check status mode
                 request_id_for_check = request_id if request_id else None
                 result = remote.thaw_check(request_id=request_id_for_check)
-                display_command_result(result, porcelain=porcelain)
-                if not result.get("success", False):
+                if not display_remote_result(result, porcelain=porcelain):
                     ctx.exit(1)
             else:
                 # Create mode
@@ -972,8 +981,7 @@ def thaw(
                     sync=sync,
                     dry_run=ctx.obj["dry_run"],
                 )
-                display_command_result(result, porcelain=porcelain)
-                if not result.get("success", False):
+                if not display_remote_result(result, porcelain=porcelain):
                     ctx.exit(1)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
@@ -1055,11 +1063,9 @@ def repair_metadata(ctx, porcelain):
     """
     remote = ctx.obj.get("remote_client")
     if remote:
-        from deepfreeze.cli.display import display_command_result
         try:
             result = remote.repair_metadata(dry_run=ctx.obj["dry_run"])
-            display_command_result(result, porcelain=porcelain)
-            if not result.get("success", False):
+            if not display_remote_result(result, porcelain=porcelain):
                 ctx.exit(1)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
