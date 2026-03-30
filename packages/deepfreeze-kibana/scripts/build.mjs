@@ -3,11 +3,14 @@
  *
  * Produces: build/deepfreeze-{kibanaVersion}.zip
  * Install:  kibana-plugin install file:///path/to/deepfreeze-{version}.zip
+ *
+ * Uses esbuild for both server and client compilation — fast, no tsc
+ * version compatibility issues, and handles .ts imports correctly.
  */
 
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'fs';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -23,53 +26,51 @@ console.log(`Building Deepfreeze Kibana plugin for Kibana ${KIBANA_VERSION}...`)
 if (existsSync(BUILD)) rmSync(BUILD, { recursive: true });
 mkdirSync(TARGET, { recursive: true });
 
-// -- Step 1: Compile server + common TypeScript --
-console.log('  Compiling server + common TypeScript...');
+// Collect all .ts files in a directory tree
+function collectTsFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) {
+      files.push(...collectTsFiles(full));
+    } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) {
+      files.push(full);
+    }
+  }
+  return files;
+}
 
-// Write tsconfig in the plugin root (not build/) so relative paths work
-const tsConfig = {
-  compilerOptions: {
-    target: 'ES2020',
-    module: 'commonjs',
-    moduleResolution: 'node',
-    outDir: './build/kibana/deepfreeze',
-    rootDir: '.',
-    declaration: false,
-    strict: false,
-    esModuleInterop: true,
-    skipLibCheck: true,
-    resolveJsonModule: true,
-    baseUrl: '.',
-    paths: {
-      '@kbn/core/server': ['./typestubs/core/server'],
-      '@kbn/core/public': ['./typestubs/core/public'],
-      '@kbn/config-schema': ['./typestubs/config-schema'],
-      '@kbn/logging': ['./typestubs/logging'],
-    },
-  },
-  include: [
-    'server/**/*.ts',
-    'common/**/*.ts',
-  ],
-  exclude: [
-    'typestubs/**',
-    'build/**',
-    'node_modules/**',
-  ],
-};
-writeFileSync(resolve(ROOT, 'tsconfig.build.json'), JSON.stringify(tsConfig, null, 2));
+// -- Step 1: Compile server + common with esbuild --
+console.log('  Compiling server + common...');
+
+// esbuild compiles each .ts file to .js, preserving directory structure.
+// @kbn/* packages are externals (provided by Kibana at runtime).
+const serverFiles = [
+  ...collectTsFiles(resolve(ROOT, 'server')),
+  ...collectTsFiles(resolve(ROOT, 'common')),
+];
 
 try {
-  execSync('npx tsc -p tsconfig.build.json', { stdio: 'inherit', cwd: ROOT });
+  execSync(`npx esbuild ${serverFiles.join(' ')} \
+    --outdir=${TARGET} \
+    --outbase=. \
+    --format=cjs \
+    --platform=node \
+    --target=node18 \
+    --log-level=warning`, {
+    stdio: 'inherit',
+    cwd: ROOT,
+  });
 } catch {
   console.error('Server/common compilation failed');
   process.exit(1);
 }
 
-// -- Step 2: Bundle client-side code with esbuild --
+// -- Step 2: Bundle client-side code --
 console.log('  Bundling client-side code...');
 
-// @kbn/* and React/EUI are externals provided by Kibana at runtime.
+// Client is bundled into a single file. @kbn/*, React, EUI, moment
+// are all externals provided by Kibana at runtime.
 try {
   execSync(`npx esbuild public/index.ts \
     --bundle \
@@ -87,7 +88,8 @@ try {
     --external:@elastic/datemath \
     --external:@emotion/* \
     --external:moment \
-    --define:process.env.NODE_ENV='"production"'`, {
+    --define:process.env.NODE_ENV='"production"' \
+    --log-level=warning`, {
     stdio: 'inherit',
     cwd: ROOT,
   });
