@@ -233,7 +233,7 @@ export default function ThawRequests() {
     {
       name: 'Actions',
       width: '80px',
-      render: (_: unknown, item: ThawRequest) => {
+      render: (item: ThawRequest) => {
         if (item.status === 'completed') {
           return (
             <EuiButtonIcon
