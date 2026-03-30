@@ -9,8 +9,8 @@
  */
 
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, statSync } from 'fs';
-import { resolve, dirname, join } from 'path';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'fs';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,34 +26,36 @@ console.log(`Building Deepfreeze Kibana plugin for Kibana ${KIBANA_VERSION}...`)
 if (existsSync(BUILD)) rmSync(BUILD, { recursive: true });
 mkdirSync(TARGET, { recursive: true });
 
-// Collect all .ts files in a directory tree
-function collectTsFiles(dir) {
-  const files = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      files.push(...collectTsFiles(full));
-    } else if (entry.endsWith('.ts') && !entry.endsWith('.d.ts')) {
-      files.push(full);
-    }
-  }
-  return files;
+
+// -- Step 1: Bundle server entry point --
+console.log('  Bundling server...');
+
+// Bundle server/index.ts into a single file. @kbn/* packages are
+// externals resolved by Kibana at runtime. Everything else (our own
+// modules, common/) gets inlined into the bundle.
+try {
+  execSync(`npx esbuild server/index.ts \
+    --bundle \
+    --outfile=${resolve(TARGET, 'server', 'index.js')} \
+    --format=cjs \
+    --platform=node \
+    --target=node18 \
+    --external:@kbn/* \
+    --log-level=warning`, {
+    stdio: 'inherit',
+    cwd: ROOT,
+  });
+} catch {
+  console.error('Server bundle failed');
+  process.exit(1);
 }
 
-// -- Step 1: Compile server + common with esbuild --
-console.log('  Compiling server + common...');
-
-// esbuild compiles each .ts file to .js, preserving directory structure.
-// @kbn/* packages are externals (provided by Kibana at runtime).
-const serverFiles = [
-  ...collectTsFiles(resolve(ROOT, 'server')),
-  ...collectTsFiles(resolve(ROOT, 'common')),
-];
-
+// -- Step 1b: Bundle common (for any direct requires) --
+console.log('  Bundling common...');
 try {
-  execSync(`npx esbuild ${serverFiles.join(' ')} \
-    --outdir=${TARGET} \
-    --outbase=. \
+  execSync(`npx esbuild common/index.ts \
+    --bundle \
+    --outfile=${resolve(TARGET, 'common', 'index.js')} \
     --format=cjs \
     --platform=node \
     --target=node18 \
@@ -62,7 +64,7 @@ try {
     cwd: ROOT,
   });
 } catch {
-  console.error('Server/common compilation failed');
+  console.error('Common bundle failed');
   process.exit(1);
 }
 
