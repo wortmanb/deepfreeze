@@ -102,8 +102,8 @@ export default function ThawRequests() {
     setToasts((prev) => [...prev, { id, title, color, text }]);
   }, []);
 
-  const removeToast = useCallback((t: { id: string }) => {
-    setToasts((prev) => prev.filter((x) => x.id !== t.id));
+  const removeToast = useCallback((removedToast: { id: string }) => {
+    setToasts((prev) => prev.filter((x) => x.id !== removedToast.id));
   }, []);
 
   const openFlyout = useCallback((item: ThawRequest) => {
@@ -429,7 +429,7 @@ export default function ThawRequests() {
 
       <EuiGlobalToastList
         toasts={toasts}
-        dismissToast={removeToast}
+        dismissToast={removeToast as any}
         toastLifeTimeMs={8000}
       />
     </>
