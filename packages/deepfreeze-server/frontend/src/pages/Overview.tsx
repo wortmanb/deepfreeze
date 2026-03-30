@@ -185,6 +185,21 @@ export default function Overview() {
     }
   }, []);
 
+  // Auto-refresh restore progress while thaw detail flyout is open
+  useEffect(() => {
+    if (!detailThaw || detailThaw.status !== 'in_progress') return;
+    const reqId = String(detailThaw.request_id || detailThaw.id || '');
+    if (!reqId) return;
+
+    const interval = setInterval(() => {
+      api.getRestoreProgress(reqId)
+        .then((data) => setRestoreProgress(data.repos))
+        .catch(() => {});
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [detailThaw]);
+
   const closeDetail = () => {
     setDetailRepo(null);
     setDetailThaw(null);

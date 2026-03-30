@@ -99,6 +99,21 @@ export default function ThawRequests() {
       }
     }
   }, []);
+
+  // Auto-refresh restore progress while flyout is open for in_progress requests
+  useEffect(() => {
+    if (!flyoutItem || flyoutItem.status !== 'in_progress') return;
+    const reqId = String(flyoutItem.request_id || flyoutItem.id || '');
+    if (!reqId) return;
+
+    const interval = setInterval(() => {
+      api.getRestoreProgress(reqId)
+        .then((data) => setRestoreProgress(data.repos))
+        .catch(() => {});
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [flyoutItem]);
   const [sortField, setSortField] = useState<string>('created_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [pageIndex, setPageIndex] = useState(0);
