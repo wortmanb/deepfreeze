@@ -174,9 +174,9 @@ export default function Actions() {
 
       if (result.success) {
         addToast(
-          `${result.action} ${dryRun ? '(dry run) ' : ''}completed`,
+          `${result.action} ${dryRun ? '(dry run) ' : ''}${activeAction === 'thaw' ? 'submitted' : 'completed'}`,
           'success',
-          result.summary || 'Action completed successfully.',
+          result.summary || `Action ${activeAction === 'thaw' ? 'submitted' : 'completed'} successfully.`,
         );
       } else {
         addToast(
