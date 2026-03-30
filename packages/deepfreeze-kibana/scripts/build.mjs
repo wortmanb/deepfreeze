@@ -4,8 +4,12 @@
  * Produces: build/deepfreeze-{kibanaVersion}.zip
  * Install:  kibana-plugin install file:///path/to/deepfreeze-{version}.zip
  *
- * Uses esbuild for both server and client compilation — fast, no tsc
- * version compatibility issues, and handles .ts imports correctly.
+ * Bundle format notes:
+ *  - Server bundle: plain CJS (Node.js loads it)
+ *  - Public bundle: must call __kbnBundles__.define('plugin/deepfreeze/public', ...)
+ *    and must live at target/public/deepfreeze.plugin.js
+ *    Shared npm packages (React, EUI, etc.) are exposed by Kibana under
+ *    window.__kbnSharedDeps__.*  (see @kbn/ui-shared-deps-src/src/definitions.js)
  */
 
 import { execSync } from 'child_process';
@@ -51,34 +55,21 @@ try {
   process.exit(1);
 }
 
-// -- Step 1b: Bundle common (for any direct requires) --
-console.log('  Bundling common...');
-try {
-  execSync(`npx esbuild common/index.ts \
-    --bundle \
-    --outfile=${resolve(TARGET, 'common', 'index.js')} \
-    --format=cjs \
-    --platform=node \
-    --target=node18 \
-    --resolve-extensions=.ts,.tsx,.js,.json \
-    --log-level=warning`, {
-    stdio: 'inherit',
-    cwd: ROOT,
-  });
-} catch {
-  console.error('Common bundle failed');
-  process.exit(1);
-}
 
 // -- Step 2: Bundle client-side code --
 console.log('  Bundling client-side code...');
 
-// Client is bundled into a single file. @kbn/*, React, EUI, moment
-// are all externals provided by Kibana at runtime.
+// Build with esbuild to a temp CJS file first, then wrap it in Kibana's
+// __kbnBundles__ registration format. Kibana exposes shared npm packages
+// (React, EUI, etc.) through window.__kbnSharedDeps__; we intercept the
+// require() calls esbuild emits and map them to those globals.
+
+const tmpPublicPath = resolve(BUILD, 'tmp_public.js');
+
 try {
   execSync(`npx esbuild public/index.ts \
     --bundle \
-    --outfile=${resolve(TARGET, 'public', 'index.js')} \
+    --outfile=${tmpPublicPath} \
     --format=cjs \
     --platform=browser \
     --target=es2020 \
@@ -91,7 +82,8 @@ try {
     --external:react-router-dom \
     --external:@elastic/eui \
     --external:@elastic/datemath \
-    --external:@emotion/* \
+    --external:@emotion/react \
+    --external:@emotion/cache \
     --external:moment \
     --define:process.env.NODE_ENV='"production"' \
     --log-level=warning`, {
@@ -102,6 +94,52 @@ try {
   console.error('Client bundle failed');
   process.exit(1);
 }
+
+// Wrap esbuild CJS output in Kibana's plugin bundle format.
+// Kibana discovers this file at:  <plugin>/target/public/deepfreeze.plugin.js
+// and loads it via:  __kbnBundles__.get('plugin/deepfreeze/public').plugin()
+const esbuildBundle = readFileSync(tmpPublicPath, 'utf8');
+const kibanaBundle = `(function () {
+  var module = { exports: {} };
+  var exports = module.exports;
+
+  // Map external require() calls (emitted by esbuild) to Kibana's shared deps.
+  // Kibana exposes all shared npm packages under window.__kbnSharedDeps__.*
+  // See: @kbn/ui-shared-deps-src/src/definitions.js
+  function require(id) {
+    var S = typeof __kbnSharedDeps__ !== 'undefined' ? __kbnSharedDeps__ : {};
+    var sharedMap = {
+      'react':            S.React,
+      'react-dom':        S.ReactDom,
+      'react-router-dom': S.ReactRouterDom,
+      '@elastic/eui':     S.ElasticEui,
+      '@elastic/datemath': S.KbnDatemath,
+      '@emotion/react':   S.EmotionReact,
+      '@emotion/cache':   S.EmotionCache,
+      'moment':           S.Moment,
+    };
+    if (Object.prototype.hasOwnProperty.call(sharedMap, id)) {
+      return sharedMap[id];
+    }
+    // @kbn/* imports that reach here are type-only; return empty object.
+    return {};
+  }
+
+${esbuildBundle}
+
+  // Register with Kibana's plugin loader.
+  // get('plugin/deepfreeze/public') returns module.exports, which has { plugin: fn }
+  __kbnBundles__.define('plugin/deepfreeze/public', function () {
+    return module.exports;
+  }, 0);
+})();
+`;
+
+mkdirSync(resolve(TARGET, 'target', 'public'), { recursive: true });
+writeFileSync(resolve(TARGET, 'target', 'public', 'deepfreeze.plugin.js'), kibanaBundle);
+rmSync(tmpPublicPath, { force: true });
+console.log('  Client bundle wrapped for Kibana.');
+
 
 // -- Step 3: Copy manifest + package.json --
 console.log('  Copying manifest...');
