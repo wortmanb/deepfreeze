@@ -4,6 +4,11 @@
   "kibanaVersion": "kibana",
   "server": true,
   "ui": true,
+  "owner": {
+    "name": "Deepfreeze",
+    "githubTeam": "deepfreeze"
+  },
+  "description": "Elasticsearch archive lifecycle management",
   "requiredPlugins": ["navigation"],
   "optionalPlugins": ["security"],
   "requiredBundles": []
