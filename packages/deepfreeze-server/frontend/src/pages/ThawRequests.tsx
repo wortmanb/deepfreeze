@@ -12,15 +12,18 @@ import {
   EuiFlexGroup,
   EuiFlexItem,
   EuiButton,
+  EuiButtonIcon,
   EuiLoadingSpinner,
   EuiCallOut,
   EuiText,
   EuiProgress,
+  EuiConfirmModal,
+  EuiGlobalToastList,
   type CriteriaWithPagination,
   type EuiBasicTableColumn,
 } from '@elastic/eui';
 import { useStatus } from '../hooks/useStatus';
-import { api, type RestoreProgress } from '../api/client';
+import { api, type RestoreProgress, type CommandResult } from '../api/client';
 import RefreshControl from '../components/RefreshControl';
 
 type ThawRequest = Record<string, unknown>;
@@ -78,16 +81,34 @@ function ThawFlyoutContent({ item }: { item: ThawRequest }) {
   );
 }
 
+interface Toast {
+  id: string;
+  title: string;
+  color: 'success' | 'danger';
+  text?: string;
+}
+
 export default function ThawRequests() {
   const { status, loading, error, refresh } = useStatus();
   const [flyoutItem, setFlyoutItem] = useState<ThawRequest | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<RestoreProgress[] | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
+  const [refreezeTarget, setRefreezeTarget] = useState<ThawRequest | null>(null);
+  const [refreezing, setRefreezing] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const addToast = useCallback((title: string, color: 'success' | 'danger', text?: string) => {
+    const id = String(Date.now());
+    setToasts((prev) => [...prev, { id, title, color, text }]);
+  }, []);
+
+  const removeToast = useCallback((removedToast: { id: string }) => {
+    setToasts((prev) => prev.filter((x) => x.id !== removedToast.id));
+  }, []);
 
   const openFlyout = useCallback((item: ThawRequest) => {
     setFlyoutItem(item);
     setRestoreProgress(null);
-    // Load restore progress for in_progress requests
     if (item.status === 'in_progress') {
       const reqId = String(item.request_id || item.id || '');
       if (reqId) {
@@ -99,6 +120,42 @@ export default function ThawRequests() {
       }
     }
   }, []);
+
+  // Auto-refresh restore progress while flyout is open for in_progress requests
+  useEffect(() => {
+    if (!flyoutItem || flyoutItem.status !== 'in_progress') return;
+    const reqId = String(flyoutItem.request_id || flyoutItem.id || '');
+    if (!reqId) return;
+
+    const interval = setInterval(() => {
+      api.getRestoreProgress(reqId)
+        .then((data) => setRestoreProgress(data.repos))
+        .catch(() => {});
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [flyoutItem]);
+
+  const handleRefreeze = async () => {
+    if (!refreezeTarget) return;
+    const reqId = String(refreezeTarget.request_id || refreezeTarget.id || '');
+    setRefreezing(true);
+    try {
+      const result: CommandResult = await api.refreeze({ request_id: reqId });
+      if (result.success) {
+        addToast('Refreeze completed', 'success', result.summary || `Request ${reqId.substring(0, 8)} refrozen.`);
+        refresh(true);
+      } else {
+        addToast('Refreeze failed', 'danger', result.summary || 'Check errors for details.');
+      }
+    } catch (err) {
+      addToast('Refreeze error', 'danger', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setRefreezing(false);
+      setRefreezeTarget(null);
+    }
+  };
+
   const [sortField, setSortField] = useState<string>('created_at');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [pageIndex, setPageIndex] = useState(0);
@@ -173,6 +230,27 @@ export default function ThawRequests() {
         return trimDate(ts);
       },
     },
+    {
+      name: 'Actions',
+      width: '80px',
+      render: (item: ThawRequest) => {
+        if (item.status === 'completed') {
+          return (
+            <EuiButtonIcon
+              iconType="snowflake"
+              color="danger"
+              aria-label="Refreeze this thaw request"
+              title="Refreeze"
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                setRefreezeTarget(item);
+              }}
+            />
+          );
+        }
+        return null;
+      },
+    },
   ];
 
   const onTableChange = ({ page, sort }: CriteriaWithPagination<ThawRequest>) => {
@@ -242,6 +320,31 @@ export default function ThawRequests() {
         noItemsMessage="No thaw requests found"
       />
 
+      {/* Refreeze confirmation modal */}
+      {refreezeTarget && (
+        <EuiConfirmModal
+          title="Refreeze this thaw request?"
+          onCancel={() => setRefreezeTarget(null)}
+          onConfirm={handleRefreeze}
+          cancelButtonText="Cancel"
+          confirmButtonText={refreezing ? 'Refreezing...' : 'Refreeze'}
+          buttonColor="danger"
+          isLoading={refreezing}
+        >
+          <EuiText size="s">
+            <p>
+              This will unmount the repositories and return them to frozen state for thaw request{' '}
+              <strong>{String(refreezeTarget.request_id || '').substring(0, 8)}</strong>.
+            </p>
+            {Boolean(refreezeTarget.start_date && refreezeTarget.end_date) && (
+              <p>
+                Date range: {String(trimDate(refreezeTarget.start_date) || '?')} &rarr; {String(trimDate(refreezeTarget.end_date) || '?')}
+              </p>
+            )}
+          </EuiText>
+        </EuiConfirmModal>
+      )}
+
       {flyoutItem && (
         <EuiFlyout onClose={() => setFlyoutItem(null)} size="m" ownFocus>
           <EuiFlyoutHeader hasBorder>
@@ -302,9 +405,33 @@ export default function ThawRequests() {
                 )}
               </>
             )}
+
+            {/* Refreeze button in flyout for completed requests */}
+            {flyoutItem.status === 'completed' && (
+              <>
+                <EuiSpacer size="l" />
+                <EuiButton
+                  color="danger"
+                  iconType="snowflake"
+                  onClick={() => {
+                    setFlyoutItem(null);
+                    setRefreezeTarget(flyoutItem);
+                  }}
+                  fullWidth
+                >
+                  Refreeze this request
+                </EuiButton>
+              </>
+            )}
           </EuiFlyoutBody>
         </EuiFlyout>
       )}
+
+      <EuiGlobalToastList
+        toasts={toasts}
+        dismissToast={removeToast as any}
+        toastLifeTimeMs={8000}
+      />
     </>
   );
 }
