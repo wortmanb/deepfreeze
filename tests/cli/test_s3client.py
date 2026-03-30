@@ -38,7 +38,9 @@ class TestAwsS3ClientInstantiation:
 
         assert client is not None
         assert client.client == mock_client
-        mock_boto3.client.assert_called_once_with("s3")
+        mock_boto3.client.assert_called_once()
+        args, kwargs = mock_boto3.client.call_args
+        assert args[0] == "s3"
         mock_client.list_buckets.assert_called_once()
 
     @patch("deepfreeze_core.aws_client.boto3")
