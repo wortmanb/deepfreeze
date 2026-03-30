@@ -30,6 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_ONLY=false
 DEV_MODE=false
 UNINSTALL=false
+YES_MODE=false
 CONFIG_DIR="${HOME}/.deepfreeze"
 CONFIG_FILE="${CONFIG_DIR}/config.yml"
 
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --cli-only)  CLI_ONLY=true; shift ;;
     --dev)       DEV_MODE=true; shift ;;
     --uninstall) UNINSTALL=true; shift ;;
+    -y|--yes)    YES_MODE=true; shift ;;
     -h|--help)
       echo "Usage: ./install.sh [OPTIONS]"
       echo ""
@@ -46,6 +48,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --cli-only    Install CLI + core only (no server/web UI)"
       echo "  --dev         Development mode (pip install -e)"
       echo "  --uninstall   Remove deepfreeze packages"
+      echo "  -y, --yes     Answer yes to all prompts (restart service, etc.)"
       echo "  -h, --help    Show this help"
       exit 0
       ;;
@@ -233,8 +236,12 @@ if ! $CLI_ONLY && [[ -d /etc/systemd/system ]]; then
   if systemctl is-active --quiet deepfreeze-server 2>/dev/null; then
     # Service is already running — offer to restart it
     ok "deepfreeze-server service is running"
-    ask "Restart deepfreeze-server to pick up changes? [y/N]:"
-    read -r RESTART_SERVICE
+    if $YES_MODE; then
+      RESTART_SERVICE="y"
+    else
+      ask "Restart deepfreeze-server to pick up changes? [y/N]:"
+      read -r RESTART_SERVICE
+    fi
     if [[ "${RESTART_SERVICE,,}" == "y" ]]; then
       sudo systemctl restart deepfreeze-server
       ok "deepfreeze-server restarted"
