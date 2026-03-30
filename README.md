@@ -1,5 +1,7 @@
 # Deepfreeze
 
+[![Tests](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml/badge.svg)](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml)
+
 Elasticsearch cloud storage archival and lifecycle management.
 
 Deepfreeze enables you to archive Elasticsearch searchable snapshots to cloud archive storage (AWS Glacier, Azure Archive, GCP Archive) and restore them on demand, providing significant cost savings for long-term data retention.
