@@ -375,7 +375,7 @@ export default function Actions() {
 
       <EuiGlobalToastList
         toasts={toasts}
-        dismissToast={removeToast}
+        dismissToast={removeToast as any}
         toastLifeTimeMs={8000}
       />
     </>
