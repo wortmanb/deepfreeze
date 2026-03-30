@@ -338,7 +338,7 @@ export default function ThawRequests() {
             </p>
             {refreezeTarget.start_date && refreezeTarget.end_date && (
               <p>
-                Date range: {trimDate(refreezeTarget.start_date)} &rarr; {trimDate(refreezeTarget.end_date)}
+                Date range: {String(trimDate(refreezeTarget.start_date) || '?')} &rarr; {String(trimDate(refreezeTarget.end_date) || '?')}
               </p>
             )}
           </EuiText>
