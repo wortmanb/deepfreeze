@@ -4,13 +4,17 @@
 
 import json
 import logging
+import threading
 
 from elasticsearch8 import Elasticsearch
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
 
 from deepfreeze_core.constants import STATUS_INDEX
+from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.exceptions import (
     ActionError,
     MissingIndexError,
@@ -52,7 +56,10 @@ class Status:
         show_buckets: bool = False,
         show_ilm: bool = False,
         show_config: bool = False,
+        show_time: bool = False,
         limit: int = None,
+        show_audit: int = None,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.status")
@@ -64,6 +71,9 @@ class Status:
         self.client = client
         self.porcelain = porcelain
         self.limit = limit
+        self.show_time = show_time
+        self.show_audit = show_audit
+        self.audit = audit
 
         # Section flags - if none specified, show all
         any_section_specified = (
@@ -81,6 +91,17 @@ class Status:
 
         self.loggit.debug("Deepfreeze Status initialized")
 
+    def _format_date_value(self, value: str) -> str:
+        if self.show_time:
+            return value.replace("T", " ")
+        return value[:10]
+
+    def _format_created_value(self, value: str) -> str:
+        display = value.replace("T", " ")
+        if self.show_time:
+            return display
+        return display[:16]
+
     def _load_settings(self) -> None:
         """Load settings from the status index."""
         self.loggit.debug("Loading settings")
@@ -96,17 +117,79 @@ class Status:
         # Initialize S3 client with provider from settings
         self.s3 = s3_client_factory(self.settings.provider)
 
+    def _get_repo_storage_tier(self, bucket: str, base_path: str) -> str:
+        """
+        Sample blobs in a repository to determine the predominant storage tier.
+
+        Returns a summary like "Archive", "Hot", "Cool", or "Mixed".
+        """
+        try:
+            # Normalize path
+            path = base_path.strip("/")
+            if path:
+                path += "/"
+
+            # List first few objects to sample storage tier
+            objects = self.s3.list_objects(bucket, path)
+            if not objects:
+                return "Empty"
+
+            # Sample up to 10 objects
+            sample = objects[:10]
+            tiers = set()
+            for obj in sample:
+                # Get storage class from object metadata
+                storage_class = obj.get("StorageClass", "STANDARD")
+                # For Azure, also check BlobTier
+                blob_tier = obj.get("BlobTier")
+                if blob_tier:
+                    tiers.add(blob_tier)
+                else:
+                    tiers.add(storage_class)
+
+            # Return summary
+            if len(tiers) == 1:
+                tier = tiers.pop()
+                # Normalize tier names for display
+                tier_display = {
+                    "GLACIER": "Archive",
+                    "DEEP_ARCHIVE": "Archive",
+                    "Archive": "Archive",
+                    "STANDARD": "Hot",
+                    "Hot": "Hot",
+                    "Cool": "Cool",
+                    "STANDARD_IA": "Cool",
+                    "ARCHIVE": "Archive",
+                    "COLDLINE": "Archive",
+                    "NEARLINE": "Cool",
+                }.get(tier, tier)
+                return tier_display
+            elif len(tiers) > 1:
+                return "Mixed"
+            else:
+                return "Unknown"
+        except Exception as e:
+            self.loggit.debug(
+                "Error getting storage tier for %s/%s: %s", bucket, base_path, e
+            )
+            return "N/A"
+
     def _get_repositories_status(self) -> list:
         """Get status of all repositories."""
         repos = []
         try:
             all_repos = get_all_repos(self.client)
+            # Get mounted repos list once
+            mounted_repos = get_matching_repo_names(
+                self.client, self.settings.repo_name_prefix
+            )
+
             for repo in all_repos:
                 # Check if repo is actually mounted in ES
-                mounted_repos = get_matching_repo_names(
-                    self.client, self.settings.repo_name_prefix
-                )
                 is_mounted_in_es = repo.name in mounted_repos
+
+                # Get storage tier (sample blobs)
+                storage_tier = self._get_repo_storage_tier(repo.bucket, repo.base_path)
 
                 repos.append(
                     {
@@ -117,6 +200,7 @@ class Status:
                         "end": repo.end.isoformat() if repo.end else None,
                         "is_mounted": is_mounted_in_es,
                         "thaw_state": repo.thaw_state,
+                        "storage_tier": storage_tier,
                         "thawed_at": (
                             repo.thawed_at.isoformat() if repo.thawed_at else None
                         ),
@@ -186,7 +270,6 @@ class Status:
                             policies.append(
                                 {
                                     "name": policy_name,
-                                    "phase": phase_name,
                                     "repository": snapshot_repo,
                                     "indices_count": len(in_use_by.get("indices", [])),
                                     "data_streams_count": len(
@@ -258,11 +341,15 @@ class Status:
                 table.add_column("Date Range", style="white")
                 table.add_column("Mounted", style="green")
                 table.add_column("Thaw State", style="magenta")
+                table.add_column("Storage Tier", style="blue")
 
                 for repo in sorted(display_repos, key=lambda x: x["name"]):
                     date_range = ""
                     if repo.get("start") and repo.get("end"):
-                        date_range = f"{repo['start'][:10]} - {repo['end'][:10]}"
+                        date_range = (
+                            f"{self._format_date_value(repo['start'])} - "
+                            f"{self._format_date_value(repo['end'])}"
+                        )
 
                     mounted_str = (
                         "[green]Yes[/green]"
@@ -278,6 +365,17 @@ class Status:
                         "expired": "red",
                     }.get(thaw_state, "white")
 
+                    # Storage tier with color coding
+                    storage_tier = repo.get("storage_tier", "N/A")
+                    tier_color = {
+                        "Archive": "blue",
+                        "Hot": "green",
+                        "Cool": "cyan",
+                        "Mixed": "yellow",
+                        "Empty": "dim",
+                        "N/A": "dim",
+                    }.get(storage_tier, "white")
+
                     table.add_row(
                         repo["name"],
                         repo.get("bucket", "N/A"),
@@ -285,6 +383,7 @@ class Status:
                         date_range,
                         mounted_str,
                         f"[{state_color}]{thaw_state}[/{state_color}]",
+                        f"[{tier_color}]{storage_tier}[/{tier_color}]",
                     )
 
                 self.console.print(table)
@@ -315,7 +414,8 @@ class Status:
                     date_range = ""
                     if req.get("start_date") and req.get("end_date"):
                         date_range = (
-                            f"{req['start_date'][:10]} - {req['end_date'][:10]}"
+                            f"{self._format_date_value(req['start_date'])} - "
+                            f"{self._format_date_value(req['end_date'])}"
                         )
 
                     repos_str = ", ".join(req.get("repos", [])[:3])
@@ -324,7 +424,7 @@ class Status:
 
                     created = req.get("created_at", "N/A")
                     if created and created != "N/A":
-                        created = created[:16].replace("T", " ")
+                        created = self._format_created_value(created)
 
                     table.add_row(
                         req.get("request_id", "N/A"),
@@ -366,7 +466,6 @@ class Status:
             if ilm_policies:
                 table = Table(title="ILM Policies (referencing deepfreeze)")
                 table.add_column("Policy Name", style="cyan")
-                table.add_column("Phase", style="yellow")
                 table.add_column("Repository", style="green")
                 table.add_column("Indices", style="white")
                 table.add_column("Data Streams", style="white")
@@ -375,7 +474,6 @@ class Status:
                 for policy in sorted(ilm_policies, key=lambda x: x["name"]):
                     table.add_row(
                         policy["name"],
-                        policy["phase"],
                         policy["repository"],
                         str(policy["indices_count"]),
                         str(policy["data_streams_count"]),
@@ -390,6 +488,36 @@ class Status:
                 )
                 self.console.print()
 
+    def _display_audit_table(self, entries: list):
+        """Display audit entries in a Rich table."""
+        if not entries:
+            self.console.print("[dim]No recent audit entries found.[/dim]")
+            return
+
+        table = Table(
+            title=f"Recent Audit Log (last {len(entries)} entries)",
+            show_header=True,
+            header_style="bold blue",
+        )
+        table.add_column("Timestamp")
+        table.add_column("Action")
+        table.add_column("Dry Run")
+        table.add_column("Success")
+        table.add_column("Duration")
+        table.add_column("User")
+
+        for entry in entries:
+            table.add_row(
+                entry.get("timestamp", "N/A")[:19],
+                entry.get("action", "N/A"),
+                "Yes" if entry.get("dry_run") else "No",
+                "✓" if entry.get("success") else "✗",
+                f"{entry.get('duration_ms', 0) / 1000:.1f}s",
+                entry.get("user", "unknown"),
+            )
+
+        self.console.print(table)
+
     def do_dry_run(self) -> None:
         """
         Perform a dry-run of the status check.
@@ -401,24 +529,67 @@ class Status:
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
         self.do_action()
 
+    def _gather_status_info(self):
+        """
+        Gather all status information. This method contains the potentially slow operations.
+
+        :return: tuple of (repos, thaw_requests, buckets, ilm_policies)
+        :rtype: tuple
+        """
+        # Load settings
+        self._load_settings()
+
+        # Gather all status information
+        repos = self._get_repositories_status()
+        thaw_requests = self._get_thaw_requests()
+        buckets = self._get_buckets_info()
+        ilm_policies = self._get_ilm_policies()
+
+        return repos, thaw_requests, buckets, ilm_policies
+
     def do_action(self) -> None:
         """
         Display status information about deepfreeze.
+        Shows a status message if the operation takes longer than 5 seconds.
 
         :return: None
         :rtype: None
         """
         self.loggit.debug("Starting Status action")
 
-        try:
-            # Load settings
-            self._load_settings()
+        # Setup for delayed spinner display
+        gather_completed = threading.Event()
+        live_display = None
 
-            # Gather all status information
-            repos = self._get_repositories_status()
-            thaw_requests = self._get_thaw_requests()
-            buckets = self._get_buckets_info()
-            ilm_policies = self._get_ilm_policies()
+        def show_spinner():
+            """Show spinner if operation takes too long."""
+            nonlocal live_display
+            if not gather_completed.wait(5.0):  # Wait 5 seconds
+                if not self.porcelain:
+                    spinner = Spinner(
+                        "dots",
+                        text="[dim]...still gathering status, please be patient...[/dim]",
+                    )
+                    live_display = Live(
+                        spinner,
+                        console=Console(stderr=True, force_terminal=True),
+                        refresh_per_second=10,
+                        transient=True,
+                    )
+                    live_display.start()
+
+        # Start the delayed spinner timer
+        timer_thread = threading.Thread(target=show_spinner, daemon=True)
+        timer_thread.start()
+
+        try:
+            # Gather all status information (potentially slow operations)
+            repos, thaw_requests, buckets, ilm_policies = self._gather_status_info()
+
+            # Signal that gathering is complete and stop spinner if running
+            gather_completed.set()
+            if live_display is not None:
+                live_display.stop()
 
             # Display output
             if self.porcelain:
@@ -426,7 +597,21 @@ class Status:
             else:
                 self._display_rich(repos, thaw_requests, buckets, ilm_policies)
 
+            # Add audit section if requested
+            if self.show_audit and self.audit:
+                audit_entries = self.audit.get_recent_entries(limit=self.show_audit)
+                if self.porcelain:
+                    # Add to the already printed output - need to handle differently
+                    # For now, just print audit separately
+                    output = {"audit": audit_entries}
+                    print(json.dumps(output, indent=2))
+                else:
+                    self._display_audit_table(audit_entries)
+
         except MissingIndexError:
+            gather_completed.set()  # Make sure to signal completion even on error
+            if live_display is not None:
+                live_display.stop()
             if self.porcelain:
                 print(
                     json.dumps(
@@ -450,6 +635,9 @@ class Status:
             raise
 
         except MissingSettingsError:
+            gather_completed.set()  # Make sure to signal completion even on error
+            if live_display is not None:
+                live_display.stop()
             if self.porcelain:
                 print(
                     json.dumps(
@@ -475,6 +663,9 @@ class Status:
             raise
 
         except Exception as e:
+            gather_completed.set()  # Make sure to signal completion even on error
+            if live_display is not None:
+                live_display.stop()
             if self.porcelain:
                 print(json.dumps({"error": "unexpected", "message": str(e)}))
             else:

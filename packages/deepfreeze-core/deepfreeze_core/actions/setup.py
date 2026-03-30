@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
+from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.constants import STATUS_INDEX
 from deepfreeze_core.exceptions import PreconditionError
 from deepfreeze_core.helpers import Settings
@@ -78,6 +79,7 @@ class Setup:
         ilm_policy_name: str = None,
         index_template_name: str = None,
         porcelain: bool = False,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.setup")
@@ -88,6 +90,7 @@ class Setup:
 
         self.client = client
         self.porcelain = porcelain
+        self.audit = audit
         self.year = year
         self.month = month
         self.settings = Settings(
@@ -143,10 +146,10 @@ class Setup:
             errors.append(
                 {
                     "issue": f"Status index [cyan]{STATUS_INDEX}[/cyan] already exists",
-                    "solution": f"Delete the existing index before running setup:\n"
-                    f"  [yellow]deepfreeze --host <host> DELETE index --name {STATUS_INDEX}[/yellow]\n"
-                    f"  or use the Elasticsearch API:\n"
-                    f"  [yellow]curl -X DELETE 'http://<host>:9200/{STATUS_INDEX}'[/yellow]",
+                    "solution": f"Delete the existing index using the Elasticsearch API:\n"
+                    f"  [yellow]curl -X DELETE 'https://<host>:9200/{STATUS_INDEX}'[/yellow]\n\n"
+                    "Or via Kibana Dev Tools:\n"
+                    f"  [yellow]DELETE /{STATUS_INDEX}[/yellow]",
                 }
             )
 
@@ -165,13 +168,16 @@ class Setup:
 
         if matching_repos:
             repo_list = "\n  ".join([f"[cyan]{repo}[/cyan]" for repo in matching_repos])
+            delete_cmds = "\n  ".join(
+                [f"[yellow]curl -X DELETE 'https://<host>:9200/_snapshot/{repo}'[/yellow]" for repo in matching_repos]
+            )
             errors.append(
                 {
                     "issue": f"Found {len(matching_repos)} existing repositor{'y' if len(matching_repos) == 1 else 'ies'} matching prefix [cyan]{self.settings.repo_name_prefix}[/cyan]:\n  {repo_list}",
                     "solution": "Delete the existing repositories before running setup:\n"
-                    "  [yellow]deepfreeze cleanup[/yellow]\n"
-                    "  or manually delete each repository:\n"
-                    "  [yellow]curl -X DELETE 'http://<host>:9200/_snapshot/<repo_name>'[/yellow]\n"
+                    f"  {delete_cmds}\n\n"
+                    "Or via Kibana Dev Tools:\n"
+                    f"  [yellow]DELETE /_snapshot/{self.settings.repo_name_prefix}-*[/yellow]\n"
                     "\n[bold]WARNING:[/bold] Ensure you have backups before deleting repositories!",
                 }
             )
@@ -179,11 +185,13 @@ class Setup:
         # Third, check if the bucket already exists
         self.loggit.debug("Checking if bucket %s exists", self.new_bucket_name)
         if self.s3.bucket_exists(self.new_bucket_name):
+            storage_type = self.s3.STORAGE_TYPE
+            delete_cmd = self.s3.STORAGE_DELETE_CMD.format(bucket=self.new_bucket_name)
             errors.append(
                 {
-                    "issue": f"S3 bucket [cyan]{self.new_bucket_name}[/cyan] already exists",
-                    "solution": f"Delete the existing bucket before running setup:\n"
-                    f"  [yellow]aws s3 rb s3://{self.new_bucket_name} --force[/yellow]\n"
+                    "issue": f"{storage_type} [cyan]{self.new_bucket_name}[/cyan] already exists",
+                    "solution": f"Delete the existing {storage_type.lower()} before running setup:\n"
+                    f"  [yellow]{delete_cmd}[/yellow]\n"
                     "\n[bold]WARNING:[/bold] This will delete all data in the bucket!\n"
                     "Or use a different bucket_name_prefix in your configuration.",
                 }
@@ -249,9 +257,14 @@ class Setup:
                 template_type,
             )
 
-        # Fifth, check for S3 repository plugin (only for ES 7.x and below)
-        # NOTE: Elasticsearch 8.x+ has built-in S3 repository support, no plugin needed
-        self.loggit.debug("Checking S3 repository support")
+        # Fifth, check for repository plugin based on provider
+        # NOTE: Elasticsearch 8.x+ has built-in repository support for all providers
+        # Get plugin info from the storage client class
+        plugin_name = self.s3.ES_PLUGIN_NAME
+        plugin_display = self.s3.ES_PLUGIN_DISPLAY_NAME
+        doc_url = self.s3.ES_PLUGIN_DOC_URL
+
+        self.loggit.debug("Checking %s repository support", plugin_display)
         try:
             # Get Elasticsearch version
             cluster_info = self.client.info()
@@ -259,47 +272,55 @@ class Setup:
             major_version = int(es_version.split(".")[0])
 
             if major_version < 8:
-                # ES 7.x and below require the repository-s3 plugin
+                # ES 7.x and below require repository plugins
                 self.loggit.debug(
-                    "Elasticsearch %s detected - checking for S3 repository plugin",
+                    "Elasticsearch %s detected - checking for %s repository plugin",
                     es_version,
+                    plugin_display,
                 )
 
                 # Get cluster plugins
                 nodes_info = self.client.nodes.info(node_id="_all", metric="plugins")
 
-                # Check if any node has the S3 plugin
-                has_s3_plugin = False
+                # Check if any node has the required plugin
+                has_plugin = False
                 for node_id, node_data in nodes_info.get("nodes", {}).items():
                     plugins = node_data.get("plugins", [])
                     for plugin in plugins:
-                        if plugin.get("name") == "repository-s3":
-                            has_s3_plugin = True
-                            self.loggit.debug("Found S3 plugin on node %s", node_id)
+                        if plugin.get("name") == plugin_name:
+                            has_plugin = True
+                            self.loggit.debug(
+                                "Found %s plugin on node %s", plugin_name, node_id
+                            )
                             break
-                    if has_s3_plugin:
+                    if has_plugin:
                         break
 
-                if not has_s3_plugin:
+                if not has_plugin:
                     errors.append(
                         {
-                            "issue": "Elasticsearch S3 repository plugin is not installed",
-                            "solution": "Install the S3 repository plugin on all Elasticsearch nodes:\n"
-                            "  [yellow]bin/elasticsearch-plugin install repository-s3[/yellow]\n"
+                            "issue": f"Elasticsearch {plugin_display} repository plugin is not installed",
+                            "solution": f"Install the {plugin_display} repository plugin on all Elasticsearch nodes:\n"
+                            f"  [yellow]bin/elasticsearch-plugin install {plugin_name}[/yellow]\n"
                             "  Then restart all Elasticsearch nodes.\n"
-                            "  See: https://www.elastic.co/guide/en/elasticsearch/plugins/current/repository-s3.html",
+                            f"  See: {doc_url}",
                         }
                     )
                 else:
-                    self.loggit.debug("S3 repository plugin is installed")
+                    self.loggit.debug(
+                        "%s repository plugin is installed", plugin_display
+                    )
             else:
-                # ES 8.x+ has built-in S3 support
+                # ES 8.x+ has built-in repository support
                 self.loggit.debug(
-                    "Elasticsearch %s detected - S3 repository support is built-in",
+                    "Elasticsearch %s detected - %s repository support is built-in",
                     es_version,
+                    plugin_display,
                 )
         except Exception as e:
-            self.loggit.warning("Could not verify S3 repository support: %s", e)
+            self.loggit.warning(
+                "Could not verify %s repository support: %s", plugin_display, e
+            )
             # Don't add to errors - this is a soft check that may fail due to permissions
 
         # If any errors were found, display them all and raise exception
@@ -348,8 +369,14 @@ class Setup:
                     )
                 )
 
-            summary = f"Found {len(errors)} precondition error{'s' if len(errors) > 1 else ''} that must be resolved before setup can proceed."
-            raise PreconditionError(summary)
+            # Build plain-text issue list for programmatic consumers
+            def _strip_markup(text: str) -> str:
+                import re
+                return re.sub(r"\[/?[a-z_ ]+\]", "", text).replace("\n", " ").strip()
+
+            issue_texts = [_strip_markup(e["issue"]) for e in errors]
+            summary = f"Found {len(errors)} precondition error{'s' if len(errors) > 1 else ''}: {'; '.join(issue_texts)}"
+            raise PreconditionError(summary, issues=issue_texts)
 
     def do_dry_run(self) -> None:
         """
@@ -361,18 +388,85 @@ class Setup:
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
         msg = f"DRY-RUN: deepfreeze setup of {self.new_repo_name} backed by {self.new_bucket_name}, with base path {self.base_path}."
         self.loggit.info(msg)
-        self._check_preconditions()
 
-        self.loggit.info("DRY-RUN: Creating bucket %s", self.new_bucket_name)
-        create_repo(
-            self.client,
-            self.new_repo_name,
-            self.new_bucket_name,
-            self.base_path,
-            self.settings.canned_acl,
-            self.settings.storage_class,
-            dry_run=True,
-        )
+        # Initialize audit tracking
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="setup",
+                dry_run=True,
+                parameters={
+                    "repo_name_prefix": self.settings.repo_name_prefix,
+                    "bucket_name_prefix": self.settings.bucket_name_prefix,
+                    "ilm_policy_name": self.ilm_policy_name,
+                    "index_template_name": self.index_template_name,
+                },
+            )
+
+        try:
+            self._check_preconditions()
+
+            # Record what would be created
+            if tracker:
+                tracker.add_result({"type": "settings_index", "action": "would_create"})
+                tracker.add_result(
+                    {
+                        "type": "bucket",
+                        "name": self.new_bucket_name,
+                        "action": "would_create",
+                    }
+                )
+                tracker.add_result(
+                    {
+                        "type": "repository",
+                        "name": self.new_repo_name,
+                        "bucket": self.new_bucket_name,
+                        "base_path": self.base_path,
+                        "action": "would_create",
+                    }
+                )
+                if self.ilm_policy_name:
+                    tracker.add_result(
+                        {
+                            "type": "ilm_policy",
+                            "name": self.ilm_policy_name,
+                            "action": "would_create_or_update",
+                        }
+                    )
+                if self.index_template_name:
+                    tracker.add_result(
+                        {
+                            "type": "index_template",
+                            "name": self.index_template_name,
+                            "action": "would_update",
+                        }
+                    )
+                tracker.set_summary(
+                    {
+                        "would_create_repository": self.new_repo_name,
+                        "would_create_bucket": self.new_bucket_name,
+                        "would_create_base_path": self.base_path,
+                    }
+                )
+
+            self.loggit.info("DRY-RUN: Creating bucket %s", self.new_bucket_name)
+            create_repo(
+                self.client,
+                self.new_repo_name,
+                self.new_bucket_name,
+                self.base_path,
+                self.settings.canned_acl,
+                self.settings.storage_class,
+                provider=self.settings.provider,
+                dry_run=True,
+            )
+        except Exception as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
+            raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
 
     def do_action(self) -> None:
         """
@@ -383,15 +477,44 @@ class Setup:
         """
         self.loggit.debug("Starting Setup action")
 
+        # Initialize audit tracking
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="setup",
+                dry_run=False,
+                parameters={
+                    "repo_name_prefix": self.settings.repo_name_prefix,
+                    "bucket_name_prefix": self.settings.bucket_name_prefix,
+                    "ilm_policy_name": self.ilm_policy_name,
+                    "index_template_name": self.index_template_name,
+                },
+            )
+
         try:
             # Check preconditions
             self._check_preconditions()
+
+            # Create audit index alongside status index (for future use)
+            if self.audit:
+                self.audit.ensure_audit_index()
+                if tracker:
+                    tracker.add_result({"type": "audit_index", "action": "created"})
+            else:
+                # Even without audit logger, ensure the index exists for future use
+                from deepfreeze_core.audit import ensure_audit_index
+
+                ensure_audit_index(self.client)
+                if tracker:
+                    tracker.add_result({"type": "audit_index", "action": "created"})
 
             # Create settings index and save settings
             self.loggit.info("Creating settings index and saving configuration")
             try:
                 ensure_settings_index(self.client, create_if_missing=True)
                 save_settings(self.client, self.settings)
+                if tracker:
+                    tracker.add_result({"type": "settings_index", "action": "created"})
             except Exception as e:
                 if self.porcelain:
                     print(f"ERROR\tsettings_index\t{str(e)}")
@@ -431,21 +554,28 @@ class Setup:
                 self.loggit.info(
                     "Successfully created S3 bucket %s", self.new_bucket_name
                 )
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "bucket",
+                            "name": self.new_bucket_name,
+                            "action": "created",
+                        }
+                    )
             except Exception as e:
                 if self.porcelain:
-                    print(f"ERROR\ts3_bucket\t{self.new_bucket_name}\t{str(e)}")
+                    print(f"ERROR\tstorage\t{self.new_bucket_name}\t{str(e)}")
                 else:
+                    # Get provider-specific error info from the storage client
+                    storage_type = self.s3.STORAGE_TYPE
+                    solutions = self.s3.STORAGE_CREATION_HELP
+
                     self.console.print(
                         Panel(
-                            f"[bold]Failed to create S3 bucket [cyan]{self.new_bucket_name}[/cyan][/bold]\n\n"
+                            f"[bold]Failed to create {storage_type} [cyan]{self.new_bucket_name}[/cyan][/bold]\n\n"
                             f"Error: {escape(str(e))}\n\n"
-                            f"[bold]Possible Solutions:[/bold]\n"
-                            f"  - Check AWS credentials and permissions\n"
-                            f"  - Verify IAM policy allows s3:CreateBucket\n"
-                            f"  - Check if bucket name is globally unique\n"
-                            f"  - Verify AWS region settings\n"
-                            f"  - Check AWS account limits for S3 buckets",
-                            title="[bold red]S3 Bucket Creation Error[/bold red]",
+                            f"[bold]{solutions}[/bold]",
+                            title=f"[bold red]{storage_type.title()} Creation Error[/bold red]",
                             border_style="red",
                             expand=False,
                         )
@@ -471,24 +601,47 @@ class Setup:
                     self.base_path,
                     self.settings.canned_acl,
                     self.settings.storage_class,
+                    provider=self.settings.provider,
                 )
                 self.loggit.info(
                     "Successfully created repository %s", self.new_repo_name
                 )
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "repository",
+                            "name": self.new_repo_name,
+                            "bucket": self.new_bucket_name,
+                            "base_path": self.base_path,
+                            "action": "created",
+                        }
+                    )
             except Exception as e:
                 if self.porcelain:
                     print(f"ERROR\trepository\t{self.new_repo_name}\t{str(e)}")
                 else:
+                    # Get provider-specific error info from the storage client
+                    plugin_name = self.s3.ES_PLUGIN_NAME
+                    plugin_display = self.s3.ES_PLUGIN_DISPLAY_NAME
+                    doc_url = self.s3.ES_PLUGIN_DOC_URL
+                    storage_type = self.s3.STORAGE_TYPE
+                    keystore_instructions = self.s3.ES_KEYSTORE_INSTRUCTIONS
+
+                    solutions = (
+                        f"[bold]Possible Solutions:[/bold]\n"
+                        f"  1. Install the {plugin_display} repository plugin on all Elasticsearch nodes:\n"
+                        f"     [yellow]bin/elasticsearch-plugin install {plugin_name}[/yellow]\n\n"
+                        f"  2. {keystore_instructions}\n\n"
+                        f"  3. Verify {storage_type} [cyan]{self.new_bucket_name}[/cyan] is accessible\n\n"
+                        f"[bold]Documentation:[/bold]\n"
+                        f"  {doc_url}"
+                    )
+
                     self.console.print(
                         Panel(
                             f"[bold]Failed to create repository [cyan]{self.new_repo_name}[/cyan][/bold]\n\n"
                             f"Error: {escape(str(e))}\n\n"
-                            f"[bold]Possible Solutions:[/bold]\n"
-                            f"  - Verify Elasticsearch has S3 plugin installed\n"
-                            f"  - Check AWS credentials are configured in Elasticsearch keystore\n"
-                            f"  - Verify S3 bucket [cyan]{self.new_bucket_name}[/cyan] is accessible\n"
-                            f"  - Check repository settings (ACL, storage class, etc.)\n"
-                            f"  - Review Elasticsearch logs for detailed error messages",
+                            f"{solutions}",
                             title="[bold red]Repository Creation Error[/bold red]",
                             border_style="red",
                             expand=False,
@@ -624,6 +777,15 @@ class Setup:
                     self.loggit.warning("Failed to update index template: %s", e)
 
             # Success!
+            if tracker:
+                tracker.set_summary(
+                    {
+                        "repository": self.new_repo_name,
+                        "bucket": self.new_bucket_name,
+                        "base_path": self.base_path,
+                    }
+                )
+
             if self.porcelain:
                 # Machine-readable output: tab-separated values
                 # Format: SUCCESS\t{repo_name}\t{bucket_name}\t{base_path}
@@ -709,19 +871,29 @@ class Setup:
 
         except PreconditionError:
             # Precondition errors are already formatted and displayed, just re-raise
+            if tracker:
+                tracker.add_error(
+                    {
+                        "code": "PRECONDITION_ERROR",
+                        "message": "Precondition check failed",
+                    }
+                )
             raise
         except Exception as e:
             # Catch any unexpected errors
+            if tracker:
+                tracker.add_error({"code": "UNEXPECTED_ERROR", "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\tunexpected\t{str(e)}")
             else:
+                provider_name = self.s3.ES_PLUGIN_DISPLAY_NAME
                 self.console.print(
                     Panel(
                         f"[bold]An unexpected error occurred during setup[/bold]\n\n"
                         f"Error: {escape(str(e))}\n\n"
                         f"[bold]What to do:[/bold]\n"
                         f"  - Check the logs for detailed error information\n"
-                        f"  - Verify all prerequisites are met (AWS credentials, ES connection, etc.)\n"
+                        f"  - Verify all prerequisites are met ({provider_name} credentials, ES connection, etc.)\n"
                         f"  - You may need to manually clean up any partially created resources\n"
                         f"  - Run [yellow]deepfreeze cleanup[/yellow] to remove any partial state",
                         title="[bold red]Unexpected Setup Error[/bold red]",
@@ -731,3 +903,7 @@ class Setup:
                 )
             self.loggit.error("Unexpected error during setup: %s", e, exc_info=True)
             raise
+        finally:
+            # Always commit audit log, even on failure
+            if self.audit and tracker:
+                self.audit.commit(tracker)

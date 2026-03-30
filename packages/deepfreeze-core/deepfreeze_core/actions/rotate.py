@@ -9,7 +9,13 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from deepfreeze_core.constants import STATUS_INDEX, THAW_STATE_FROZEN
+from deepfreeze_core.audit import AuditLogger
+from deepfreeze_core.constants import (
+    STATUS_INDEX,
+    THAW_STATE_FROZEN,
+    THAW_STATE_THAWED,
+    THAW_STATE_THAWING,
+)
 from deepfreeze_core.exceptions import (
     MissingIndexError,
     MissingSettingsError,
@@ -22,12 +28,16 @@ from deepfreeze_core.utilities import (
     get_composable_templates,
     get_ilm_policy,
     get_index_templates,
+    get_matching_repo_names,
     get_matching_repos,
     get_next_suffix,
     get_settings,
+    is_policy_safe_to_delete,
     push_to_glacier,
+    repo_has_active_indices,
     save_settings,
     unmount_repo,
+    update_repository_date_range,
     update_template_ilm_policy,
 )
 
@@ -59,6 +69,7 @@ class Rotate:
         year: int = None,
         month: int = None,
         porcelain: bool = False,
+        audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
     ) -> None:
         self.loggit = logging.getLogger("deepfreeze.actions.rotate")
@@ -72,6 +83,7 @@ class Rotate:
         self.year = year
         self.month = month
         self.porcelain = porcelain
+        self.audit = audit
 
         # Will be loaded during action
         self.settings = None
@@ -120,21 +132,29 @@ class Rotate:
             new_bucket_name = self.settings.bucket_name_prefix
             base_path = f"{self.settings.base_path_prefix}-{next_suffix}"
 
+        # Get provider-specific storage type for logging
+        storage_type = getattr(self.s3, "STORAGE_TYPE", "bucket").lower()
+
         self.loggit.info(
-            "Creating new repository %s (bucket: %s, base_path: %s)",
+            "Creating new repository %s (%s: %s, base_path: %s)",
             new_repo_name,
+            storage_type,
             new_bucket_name,
             base_path,
         )
 
         if not dry_run:
-            # Create bucket if rotating by bucket
+            # Create storage container/bucket if rotating by bucket
             if self.settings.rotate_by == "bucket":
                 if not self.s3.bucket_exists(new_bucket_name):
                     self.s3.create_bucket(new_bucket_name)
-                    self.loggit.info("Created S3 bucket %s", new_bucket_name)
+                    self.loggit.info("Created %s %s", storage_type, new_bucket_name)
                 else:
-                    self.loggit.info("S3 bucket %s already exists", new_bucket_name)
+                    self.loggit.info(
+                        "%s %s already exists",
+                        storage_type.capitalize(),
+                        new_bucket_name,
+                    )
 
             # Create repository in Elasticsearch
             create_repo(
@@ -144,6 +164,7 @@ class Rotate:
                 base_path,
                 self.settings.canned_acl,
                 self.settings.storage_class,
+                provider=self.settings.provider,
             )
 
             # Update last_suffix in settings
@@ -320,23 +341,45 @@ class Rotate:
         """
         archived_repos = []
 
-        # Get all repos matching our prefix
-        repos = get_matching_repos(
+        # Get all mounted repos matching our prefix
+        all_mounted = get_matching_repos(
             self.client, self.settings.repo_name_prefix, mounted=True
         )
 
-        # Sort by name (which includes suffix)
-        repos = sorted(repos, key=lambda r: r.name)
+        # Separate thawed/thawing repos — these have their own lifecycle
+        # (managed by refreeze, not rotation) and shouldn't count against keep
+        thaw_states = {THAW_STATE_THAWED, THAW_STATE_THAWING}
+        active_repos = sorted(
+            [r for r in all_mounted if r.thaw_state not in thaw_states],
+            key=lambda r: r.name,
+        )
 
-        # Keep the newest 'keep' repos mounted
-        repos_to_archive = repos[: -self.keep] if len(repos) > self.keep else []
+        # Keep the newest 'keep' active repos mounted
+        repos_to_archive = (
+            active_repos[: -self.keep] if len(active_repos) > self.keep else []
+        )
+
+        skipped_repos = []
 
         for repo in repos_to_archive:
+            # Check if repo has active indices BEFORE archiving
+            # (can't unmount a repo with active searchable snapshot indices)
+            has_active, active_indices = repo_has_active_indices(self.client, repo.name)
+            if has_active:
+                self.loggit.warning(
+                    "Skipping archive of %s - has %d active indices: %s",
+                    repo.name,
+                    len(active_indices),
+                    active_indices[:3],
+                )
+                skipped_repos.append(repo.name)
+                continue
+
             self.loggit.info("Archiving repository %s to Glacier", repo.name)
 
             if not dry_run:
                 try:
-                    # Push all objects to Glacier
+                    # Push all objects to archive tier
                     push_to_glacier(self.s3, repo)
 
                     # Unmount the repository
@@ -357,7 +400,114 @@ class Rotate:
             else:
                 archived_repos.append(repo.name)
 
+        if skipped_repos:
+            self.loggit.info(
+                "Skipped %d repos with active indices (will retry on next rotation): %s",
+                len(skipped_repos),
+                skipped_repos,
+            )
+
         return archived_repos
+
+    def _update_date_ranges(self) -> list:
+        """
+        Update date ranges for all mounted repositories.
+
+        Queries each mounted repo's indices to capture min/max @timestamp values.
+        This must run while repos still have searchable snapshot indices, i.e.
+        before the archive step unmounts them.
+
+        :return: List of repo names whose date ranges were updated
+        """
+        updated_repos = []
+
+        repos = get_matching_repos(
+            self.client, self.settings.repo_name_prefix, mounted=True
+        )
+
+        for repo in repos:
+            try:
+                if update_repository_date_range(self.client, repo):
+                    self.loggit.info("Updated date range for %s", repo.name)
+                    updated_repos.append(repo.name)
+            except Exception as e:
+                self.loggit.error(
+                    "Failed to update date range for %s: %s", repo.name, e
+                )
+
+        return updated_repos
+
+    def _cleanup_orphaned_policies(self, dry_run: bool = False) -> list:
+        """
+        Delete ILM policies that reference unmounted deepfreeze repositories.
+
+        This is called after archiving repos to clean up the old versioned
+        policies that now reference non-existent repositories.
+
+        :param dry_run: If True, don't actually delete anything
+        :return: List of deleted policy names
+        """
+        deleted_policies = []
+
+        if not self.settings.ilm_policy_name:
+            return deleted_policies
+
+        try:
+            all_policies = self.client.ilm.get_lifecycle()
+
+            # Get currently mounted repos
+            mounted_repos = set(
+                get_matching_repo_names(self.client, self.settings.repo_name_prefix)
+            )
+
+            for policy_name, policy_data in all_policies.items():
+                # Only check versioned policies matching our prefix
+                if not policy_name.startswith(f"{self.settings.ilm_policy_name}-"):
+                    continue
+
+                # Check if policy references a deepfreeze repo
+                policy_body = policy_data.get("policy", {})
+                phases = policy_body.get("phases", {})
+
+                for _phase_name, phase_config in phases.items():
+                    actions = phase_config.get("actions", {})
+                    if "searchable_snapshot" in actions:
+                        snapshot_repo = actions["searchable_snapshot"].get(
+                            "snapshot_repository"
+                        )
+                        # Check if it references a repo that's no longer mounted
+                        if (
+                            snapshot_repo
+                            and snapshot_repo.startswith(self.settings.repo_name_prefix)
+                            and snapshot_repo not in mounted_repos
+                        ):
+                            # Check if policy is safe to delete
+                            if is_policy_safe_to_delete(self.client, policy_name):
+                                self.loggit.info(
+                                    "Deleting orphaned ILM policy %s (references unmounted repo %s)",
+                                    policy_name,
+                                    snapshot_repo,
+                                )
+                                if not dry_run:
+                                    try:
+                                        self.client.ilm.delete_lifecycle(
+                                            name=policy_name
+                                        )
+                                        deleted_policies.append(policy_name)
+                                    except Exception as e:
+                                        self.loggit.error(
+                                            "Failed to delete policy %s: %s",
+                                            policy_name,
+                                            e,
+                                        )
+                                else:
+                                    deleted_policies.append(policy_name)
+                            break
+
+        except Exception as e:
+            self.loggit.warning("Error cleaning up orphaned policies: %s", e)
+
+        return deleted_policies
 
     def do_dry_run(self) -> None:
         """
@@ -368,6 +518,18 @@ class Rotate:
         """
         self.loggit.info("DRY-RUN MODE.  No changes will be made.")
 
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="rotate",
+                dry_run=True,
+                parameters={
+                    "keep": self.keep,
+                    "year": self.year,
+                    "month": self.month,
+                },
+            )
+
         try:
             self._load_settings()
 
@@ -375,6 +537,11 @@ class Rotate:
             new_repo, new_bucket, base_path, new_suffix = self._create_new_repository(
                 dry_run=True
             )
+
+            if tracker:
+                tracker.add_result(
+                    {"type": "repository", "name": new_repo, "action": "would_create"}
+                )
 
             if self.porcelain:
                 print(f"DRY_RUN\tnew_repository\t{new_repo}\t{new_bucket}\t{base_path}")
@@ -394,6 +561,15 @@ class Rotate:
             # Show what repos would be archived
             repos_to_archive = self._archive_old_repos(dry_run=True)
             if repos_to_archive:
+                for repo in repos_to_archive:
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "repository",
+                                "name": repo,
+                                "action": "would_archive",
+                            }
+                        )
                 if self.porcelain:
                     for repo in repos_to_archive:
                         print(f"DRY_RUN\tarchive_repository\t{repo}")
@@ -413,6 +589,14 @@ class Rotate:
             # Show ILM policy updates
             if self.settings.ilm_policy_name:
                 old_suffix = self.settings.last_suffix
+                if tracker:
+                    tracker.add_result(
+                        {
+                            "type": "ilm_policy",
+                            "name": f"{self.settings.ilm_policy_name}-{new_suffix}",
+                            "action": "would_create",
+                        }
+                    )
                 if self.porcelain:
                     print(
                         f"DRY_RUN\tilm_policy\t{self.settings.ilm_policy_name}-{old_suffix}\t{self.settings.ilm_policy_name}-{new_suffix}"
@@ -429,12 +613,50 @@ class Rotate:
                         )
                     )
 
+            # Show orphaned policies that would be deleted
+            orphaned_policies = self._cleanup_orphaned_policies(dry_run=True)
+            if orphaned_policies:
+                for policy in orphaned_policies:
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "ilm_policy",
+                                "name": policy,
+                                "action": "would_delete",
+                            }
+                        )
+                if self.porcelain:
+                    for policy in orphaned_policies:
+                        print(f"DRY_RUN\tdelete_policy\t{policy}")
+                else:
+                    policy_list = "\n".join(
+                        [f"  - [red]{p}[/red]" for p in orphaned_policies]
+                    )
+                    self.console.print(
+                        Panel(
+                            f"[bold]Would delete {len(orphaned_policies)} orphaned ILM policies:[/bold]\n{policy_list}",
+                            title="[bold blue]Dry Run - Delete Orphaned Policies[/bold blue]",
+                            border_style="blue",
+                            expand=False,
+                        )
+                    )
+
+            if tracker:
+                tracker.set_summary(
+                    {"new_repo": new_repo, "archived_count": len(repos_to_archive)}
+                )
+
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
                 self.console.print(f"[red]Error: {e}[/red]")
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
 
     def do_action(self) -> None:
         """
@@ -445,12 +667,29 @@ class Rotate:
         """
         self.loggit.debug("Starting Rotate action")
 
+        tracker = None
+        if self.audit:
+            tracker = self.audit.start_tracking(
+                action="rotate",
+                dry_run=False,
+                parameters={
+                    "keep": self.keep,
+                    "year": self.year,
+                    "month": self.month,
+                },
+            )
+
         try:
             self._load_settings()
             old_suffix = self.settings.last_suffix
 
             # Create new repository
             new_repo, new_bucket, base_path, new_suffix = self._create_new_repository()
+
+            if tracker:
+                tracker.add_result(
+                    {"type": "repository", "name": new_repo, "action": "created"}
+                )
 
             if self.porcelain:
                 print(f"CREATED\trepository\t{new_repo}\t{new_bucket}\t{base_path}")
@@ -472,6 +711,11 @@ class Rotate:
                 new_repo, old_suffix, new_suffix
             )
             if updated_policies:
+                for policy in updated_policies:
+                    if tracker:
+                        tracker.add_result(
+                            {"type": "ilm_policy", "name": policy, "action": "updated"}
+                        )
                 if self.porcelain:
                     for policy in updated_policies:
                         print(f"UPDATED\tilm_policy\t{policy}")
@@ -488,9 +732,34 @@ class Rotate:
                         )
                     )
 
+            # Update date ranges for all mounted repos (before archiving
+            # removes searchable snapshot indices)
+            updated_date_ranges = self._update_date_ranges()
+            if updated_date_ranges:
+                if self.porcelain:
+                    for repo in updated_date_ranges:
+                        print(f"UPDATED\tdate_range\t{repo}")
+                else:
+                    range_list = "\n".join(
+                        [f"  - [cyan]{r}[/cyan]" for r in updated_date_ranges]
+                    )
+                    self.console.print(
+                        Panel(
+                            f"[bold]Updated date ranges for {len(updated_date_ranges)} repositories:[/bold]\n{range_list}",
+                            title="[bold green]Date Ranges Updated[/bold green]",
+                            border_style="green",
+                            expand=False,
+                        )
+                    )
+
             # Archive old repositories
             archived = self._archive_old_repos()
             if archived:
+                for repo in archived:
+                    if tracker:
+                        tracker.add_result(
+                            {"type": "repository", "name": repo, "action": "archived"}
+                        )
                 if self.porcelain:
                     for repo in archived:
                         print(f"ARCHIVED\trepository\t{repo}")
@@ -507,6 +776,25 @@ class Rotate:
                         )
                     )
 
+            # Clean up orphaned ILM policies (policies referencing unmounted repos)
+            deleted_policies = self._cleanup_orphaned_policies()
+            if deleted_policies:
+                if self.porcelain:
+                    for policy in deleted_policies:
+                        print(f"DELETED\tilm_policy\t{policy}")
+                else:
+                    policy_list = "\n".join(
+                        [f"  - [red]{p}[/red]" for p in deleted_policies]
+                    )
+                    self.console.print(
+                        Panel(
+                            f"[bold]Deleted {len(deleted_policies)} orphaned ILM policies:[/bold]\n{policy_list}",
+                            title="[bold green]Orphaned Policies Cleaned Up[/bold green]",
+                            border_style="green",
+                            expand=False,
+                        )
+                    )
+
             # Final summary
             if not self.porcelain:
                 self.console.print(
@@ -514,7 +802,9 @@ class Rotate:
                         f"[bold green]Rotation completed successfully![/bold green]\n\n"
                         f"New repository: [cyan]{new_repo}[/cyan]\n"
                         f"Policies updated: {len(updated_policies)}\n"
-                        f"Repositories archived: {len(archived)}\n\n"
+                        f"Date ranges updated: {len(updated_date_ranges)}\n"
+                        f"Repositories archived: {len(archived)}\n"
+                        f"Orphaned policies deleted: {len(deleted_policies)}\n\n"
                         f"[bold]Next steps:[/bold]\n"
                         f"  - Verify ILM policies are using the new repository\n"
                         f"  - Monitor searchable snapshot transitions\n"
@@ -527,7 +817,14 @@ class Rotate:
 
             self.loggit.info("Rotation completed. New repository: %s", new_repo)
 
+            if tracker:
+                tracker.set_summary(
+                    {"new_repo": new_repo, "archived_count": len(archived)}
+                )
+
         except (MissingIndexError, MissingSettingsError) as e:
+            if tracker:
+                tracker.add_error({"code": type(e).__name__, "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\t{type(e).__name__}\t{str(e)}")
             else:
@@ -544,6 +841,8 @@ class Rotate:
             raise
 
         except Exception as e:
+            if tracker:
+                tracker.add_error({"code": "UNEXPECTED_ERROR", "message": str(e)})
             if self.porcelain:
                 print(f"ERROR\tunexpected\t{str(e)}")
             else:
@@ -559,3 +858,6 @@ class Rotate:
                 )
             self.loggit.error("Rotation failed: %s", e, exc_info=True)
             raise
+        finally:
+            if self.audit and tracker:
+                self.audit.commit(tracker)
