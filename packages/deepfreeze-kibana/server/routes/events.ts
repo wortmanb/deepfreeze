@@ -43,9 +43,9 @@ export function registerEventRoutes(router: IRouter, client: DeepfreezeClient, l
             'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
           },
-          // @ts-expect-error — Kibana's response typing doesn't fully support streams;
+          // Kibana's response typing doesn't fully support streams;
           // the underlying hapi server handles ReadableStream bodies correctly.
-          body: upstreamResponse.body,
+          body: upstreamResponse.body as any,
         });
       } catch (error: any) {
         logger.warn(`SSE relay failed: ${error.message}`);

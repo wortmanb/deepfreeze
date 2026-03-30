@@ -1,11 +1,21 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./target/types",
-    "emitDeclarationOnly": true,
+    "target": "ES2020",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "jsx": "react",
     "declaration": true,
-    "declarationMap": true
+    "declarationMap": true,
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "./target/types",
+    "baseUrl": ".",
+    "paths": {
+      "@kbn/*": ["./typestubs/*"]
+    }
   },
   "include": ["common/**/*", "public/**/*", "server/**/*"],
-  "exclude": ["target/**/*"]
+  "exclude": ["target/**/*", "build/**/*", "node_modules/**/*"]
 }
