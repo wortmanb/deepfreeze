@@ -103,11 +103,16 @@ const kibanaBundle = `(function () {
   var module = { exports: {} };
   var exports = module.exports;
 
+  // Expose React/ReactDOM as locals so JSX compiled with the classic transform
+  // (React.createElement calls) works even in files that don't import React.
+  var S = typeof __kbnSharedDeps__ !== 'undefined' ? __kbnSharedDeps__ : {};
+  var React    = S.React;
+  var ReactDOM = S.ReactDom;
+
   // Map external require() calls (emitted by esbuild) to Kibana's shared deps.
   // Kibana exposes all shared npm packages under window.__kbnSharedDeps__.*
   // See: @kbn/ui-shared-deps-src/src/definitions.js
   function require(id) {
-    var S = typeof __kbnSharedDeps__ !== 'undefined' ? __kbnSharedDeps__ : {};
     var sharedMap = {
       'react':            S.React,
       'react-dom':        S.ReactDom,
