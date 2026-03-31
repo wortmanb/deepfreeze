@@ -105,3 +105,7 @@ packages/deepfreeze-server/deepfreeze_server/static/
 
 # Integration test diagnostics
 tests/integration/.diagnostics/
+
+# npm
+node_modules/
+/package-lock.json
