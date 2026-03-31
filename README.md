@@ -39,6 +39,16 @@ See Elastic Search Labs blog post at https://www.elastic.co/search-labs/blog/s3-
 
 ## Installation
 
+### Prerequisites
+
+- Python 3.10+ (Python 3.8+ for `--cli-only` installs)
+- Node.js 18+ and npm (not required for `--cli-only`)
+- A running Elasticsearch 8.x or 9.x cluster
+- Cloud provider credentials (AWS, Azure, or GCP)
+
+> **Recommended:** Install into a Python virtual environment to avoid conflicts
+> with system packages.
+
 ### Quick Install
 
 The interactive installer handles packages, frontend build, config scaffolding, and optional systemd setup:
@@ -54,23 +64,29 @@ Installer options:
 | Flag | Description |
 |------|-------------|
 | `--cli-only` | Install CLI + core only (no server or Web UI) |
+| `--provider NAME` | Storage provider: `aws` (default), `azure`, `gcp` |
 | `--dev` | Development mode (editable pip installs) |
 | `--uninstall` | Remove deepfreeze packages |
+| `-y` | Non-interactive mode (accept all defaults) |
 
 ### Manual Install
 
+Run all commands from the repository root.
+
 ```bash
-# Core + CLI only
+# Core + CLI only (AWS — boto3 included by default)
 pip install packages/deepfreeze-core
 pip install packages/deepfreeze-cli
 
-# Full stack (includes server + Web UI)
+# Full stack (build frontend first — see packages/deepfreeze-server/README.md)
 pip install packages/deepfreeze-core
 pip install packages/deepfreeze-cli
 pip install packages/deepfreeze-server
 ```
 
 ### Provider extras
+
+Azure and GCP support is optional. Install the extras on `deepfreeze-core`:
 
 ```bash
 # Azure support
@@ -82,6 +98,24 @@ pip install packages/deepfreeze-core[gcp]
 # All providers
 pip install packages/deepfreeze-core[azure,gcp]
 ```
+
+### Common setup issues
+
+- **`deepfreeze: command not found`** — The Python scripts directory may not be in your `PATH`.
+  Find it with:
+  ```bash
+  python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))'
+  ```
+  Add it to your shell profile and open a new terminal.
+
+- **Azure or GCP import errors** — Install provider extras on `deepfreeze-core`, not `deepfreeze-cli`.
+  See [Provider extras](#provider-extras) above.
+
+- **`deepfreeze status` fails immediately after install** — Run `deepfreeze setup` first to
+  create the required Elasticsearch resources (ILM policies, index templates). See step 3 below.
+
+- **Server starts but Web UI is blank** — The frontend was not built before `pip install`.
+  Follow the production build steps in [packages/deepfreeze-server/README.md](packages/deepfreeze-server/README.md).
 
 ## Quick Start
 
@@ -113,12 +147,15 @@ pip install packages/deepfreeze-core[azure,gcp]
        credentials_file: /path/to/service-account.json
    ```
 
-3. **Initialize deepfreeze**:
+3. **Initialize deepfreeze** (required — creates ILM policies, index templates, and snapshot repos):
    ```bash
-   deepfreeze setup --config ~/.deepfreeze/config.yml
+   deepfreeze setup --config ~/.deepfreeze/config.yml \
+     --provider aws \
+     --bucket_name_prefix my-deepfreeze \
+     --repo_name_prefix my-deepfreeze
    ```
 
-4. **Check status**:
+4. **Check status** (only works after `setup` has been run):
    ```bash
    deepfreeze status --config ~/.deepfreeze/config.yml
    ```
