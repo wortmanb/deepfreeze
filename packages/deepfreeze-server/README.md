@@ -26,21 +26,36 @@ Browse to `http://localhost:5173` (Vite dev server proxies API calls to the back
 
 ## Production Build
 
-Build the frontend so the server serves everything from a single process:
+The frontend must be built and bundled into the package **before** `pip install`,
+so the compiled assets are included in the installed package. Use `install.sh`
+(recommended) which handles this automatically, or do it manually:
 
 ```bash
+# 1. Build the frontend
 cd packages/deepfreeze-server/frontend
 npm install
 npm run build      # outputs to frontend/dist/
+cd ../../..
+
+# 2. Copy built assets into the package directory
+cp -r packages/deepfreeze-server/frontend/dist \
+      packages/deepfreeze-server/deepfreeze_server/static
+
+# 3. Install the server package (assets are now bundled)
+pip install packages/deepfreeze-server
 ```
 
-Then run the server — it auto-detects `frontend/dist/` and serves the built SPA:
+Then run the server:
 
 ```bash
 deepfreeze-server --config ~/.deepfreeze/config.yml
 ```
 
 Browse to `http://<host>:8000`
+
+> **Development note:** When using `pip install -e` (editable), the server also
+> auto-detects `frontend/dist/` relative to the source tree. Run `npm run dev`
+> in the `frontend/` directory for hot-reload during development.
 
 ## Configuration
 

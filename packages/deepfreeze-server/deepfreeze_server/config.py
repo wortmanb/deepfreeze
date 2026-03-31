@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,8 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
                 raw = yaml.safe_load(f) or {}
             logger.info("Loaded config from %s", path)
         except Exception as e:
-            logger.warning("Failed to load config from %s: %s", path, e)
+            print(f"ERROR: Failed to load config from {path}: {e}", file=sys.stderr)
+            sys.exit(1)
 
     server_section = raw.get("server", {})
     # Parse scheduled jobs from config

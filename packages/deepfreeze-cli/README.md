@@ -60,7 +60,7 @@ deepfreeze --help
 ## Requirements
 
 - Python 3.8 or higher
-- Elasticsearch 8.x cluster
+- Elasticsearch 8.x or 9.x cluster
 - Cloud provider credentials (one of):
   - **AWS**: AWS credentials via environment, config file, or IAM role
   - **Azure**: Connection string or account name + key
@@ -73,8 +73,8 @@ deepfreeze --help
   - voluptuous
   - pyyaml
 - Optional packages for additional providers:
-  - azure-storage-blob (for Azure): `pip install deepfreeze-cli[azure]`
-  - google-cloud-storage (for GCP): `pip install deepfreeze-cli[gcp]`
+  - azure-storage-blob (for Azure): `pip install deepfreeze-core[azure]`
+  - google-cloud-storage (for GCP): `pip install deepfreeze-core[gcp]`
 
 ## Configuration
 
