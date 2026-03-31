@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom';
 import { Router, Route, Switch } from 'react-router-dom';
 import {
+  EuiProvider,
   EuiPageTemplate,
   EuiSideNav,
   EuiSpacer,
@@ -107,7 +108,9 @@ function DeepfreezeApp({ history, basename }: { history: AppMountParameters['his
 
 export function renderApp(coreStart: CoreStart, { element, history, appBasePath }: AppMountParameters) {
   ReactDOM.render(
-    <DeepfreezeApp history={history} basename={appBasePath} />,
+    <EuiProvider>
+      <DeepfreezeApp history={history} basename={appBasePath} />
+    </EuiProvider>,
     element,
   );
 
