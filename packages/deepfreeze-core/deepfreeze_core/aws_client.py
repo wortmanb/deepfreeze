@@ -65,7 +65,7 @@ Then restart Elasticsearch to apply the keystore changes."""
         access_key_id: str = None,
         secret_access_key: str = None,
     ) -> None:
-        self.loggit = logging.getLogger("deepfreeze.s3client")
+        self.loggit = logging.getLogger("deepfreeze.aws_client")
         try:
             # Build session/client kwargs based on provided credentials
             session_kwargs = {}

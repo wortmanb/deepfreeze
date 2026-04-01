@@ -342,10 +342,10 @@ def save_settings(client: Elasticsearch, settings: Settings) -> None:
     try:
         client.get(index=STATUS_INDEX, id=SETTINGS_ID)
         loggit.info("Settings document already exists, updating it")
-        client.update(index=STATUS_INDEX, id=SETTINGS_ID, doc=settings.__dict__)
+        client.update(index=STATUS_INDEX, id=SETTINGS_ID, doc=settings.to_dict())
     except NotFoundError:
         loggit.info("Settings document does not exist, creating it")
-        client.create(index=STATUS_INDEX, id=SETTINGS_ID, document=settings.__dict__)
+        client.create(index=STATUS_INDEX, id=SETTINGS_ID, document=settings.to_dict())
     loggit.info("Settings saved")
 
 
@@ -433,7 +433,7 @@ def create_repo(
         base_path if not repository.base_path else repository.base_path
     )
     loggit.debug("Repo = %s", repository)
-    client.index(index=STATUS_INDEX, body=repository.to_dict())
+    client.index(index=STATUS_INDEX, document=repository.to_dict())
     loggit.debug("Repo %s saved to status index", repo_name)
 
 
@@ -647,7 +647,7 @@ def unmount_repo(client: Elasticsearch, repo: str) -> Repository:
     loggit.debug("Recording repository details as %s", repo_obj)
 
     # Update the status index with final repository state
-    client.update(index=STATUS_INDEX, doc=repo_obj.to_dict(), id=repo_obj.docid)
+    client.update(index=STATUS_INDEX, id=repo_obj.docid, doc=repo_obj.to_dict())
     loggit.debug("Repo %s removed", repo)
     return repo_obj
 
@@ -1213,10 +1213,10 @@ def update_repository_date_range(client: Elasticsearch, repo: Repository) -> boo
 
         if response["hits"]["total"]["value"] > 0:
             doc_id = response["hits"]["hits"][0]["_id"]
-            client.update(index=STATUS_INDEX, id=doc_id, body={"doc": repo.to_dict()})
+            client.update(index=STATUS_INDEX, id=doc_id, doc=repo.to_dict())
         else:
             # Create new document if it doesn't exist
-            client.index(index=STATUS_INDEX, body=repo.to_dict())
+            client.index(index=STATUS_INDEX, document=repo.to_dict())
 
         return True
 
@@ -1515,7 +1515,7 @@ def save_thaw_request(
         request_doc["end_date"] = end_date.isoformat()
 
     try:
-        client.index(index=STATUS_INDEX, id=request_id, body=request_doc)
+        client.index(index=STATUS_INDEX, id=request_id, document=request_doc)
         loggit.info("Thaw request %s saved successfully", request_id)
     except Exception as e:
         loggit.error("Failed to save thaw request %s: %s", request_id, e)

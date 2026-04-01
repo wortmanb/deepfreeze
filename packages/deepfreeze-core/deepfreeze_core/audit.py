@@ -11,33 +11,12 @@ This module provides:
 import logging
 import socket
 from contextlib import contextmanager
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
 from elasticsearch8 import Elasticsearch
 
 from deepfreeze_core.constants import AUDIT_INDEX
-
-
-@dataclass
-class ActionResult:
-    """A single result entry from an action."""
-
-    type: str
-    action: str
-    target: Optional[str] = None
-    status: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
-
-
-@dataclass
-class ActionError:
-    """A single error entry from an action."""
-
-    code: str
-    message: str
-    target: Optional[str] = None
 
 
 class ActionTracker:
@@ -297,7 +276,7 @@ class AuditLogger:
             }
 
             # Index the document
-            self.client.index(index=AUDIT_INDEX, body=doc)
+            self.client.index(index=AUDIT_INDEX, document=doc)
             self.loggit.debug("Logged %s action to audit index", action)
             return True
 

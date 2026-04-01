@@ -352,8 +352,8 @@ class TestThawRequestOperations:
         mock_client.index.assert_called_once()
         call_kwargs = mock_client.index.call_args[1]
         assert call_kwargs["id"] == "thaw-123"
-        assert call_kwargs["body"]["request_id"] == "thaw-123"
-        assert call_kwargs["body"]["repos"] == ["repo-1", "repo-2"]
+        assert call_kwargs["document"]["request_id"] == "thaw-123"
+        assert call_kwargs["document"]["repos"] == ["repo-1", "repo-2"]
 
     def test_get_thaw_request_returns_document(self):
         """Test get_thaw_request retrieves thaw request"""

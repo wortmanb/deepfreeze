@@ -62,11 +62,11 @@ class S3Client(metaclass=abc.ABCMeta):
         retrieval_tier: str = "Standard",
     ) -> None:
         """
-        Return a bucket from deepfreeze_core.
+        Initiate restore of archived objects so they become accessible.
 
         Args:
-            bucket_name (str): The name of the bucket to return.
-            base_path (str): The base path to the bucket to return.
+            bucket_name (str): The name of the bucket containing the objects.
+            base_path (str): The base path prefix for objects to restore.
             object_keys (list[dict]): A list of object metadata dictionaries (each containing 'Key', 'StorageClass', etc.).
             restore_days (int): The number of days to keep the object restored.
             retrieval_tier (str): The retrieval tier to use.
@@ -81,12 +81,12 @@ class S3Client(metaclass=abc.ABCMeta):
         self, bucket_name: str, path: str, storage_class: str = "GLACIER"
     ) -> None:
         """
-        Return a bucket to deepfreeze.
+        Move objects back to archive storage (e.g. Glacier).
 
         Args:
-            bucket_name (str): The name of the bucket to return.
-            path (str): The path to the bucket to return.
-            storage_class (str): The storage class to send the data to.
+            bucket_name (str): The name of the bucket containing the objects.
+            path (str): The path prefix for objects to archive.
+            storage_class (str): The target archive storage class.
 
         """
         return

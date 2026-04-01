@@ -84,18 +84,18 @@ class Repository:
         repo_json = repo.to_json()
     """
 
-    name: str = None
-    bucket: str = None
-    base_path: str = None
-    start: datetime = None
-    end: datetime = None
+    name: Optional[str] = None
+    bucket: Optional[str] = None
+    base_path: Optional[str] = None
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
     is_thawed: bool = False  # DEPRECATED - use thaw_state instead
     is_mounted: bool = True
     thaw_state: str = THAW_STATE_ACTIVE  # active, frozen, thawing, thawed, expired
-    thawed_at: datetime = None  # When restore completed
-    expires_at: datetime = None  # When restore will/did expire
+    thawed_at: Optional[datetime] = None  # When restore completed
+    expires_at: Optional[datetime] = None  # When restore will/did expire
     doctype: str = "repository"
-    docid: str = None
+    docid: Optional[str] = None
 
     def __post_init__(self):
         """Convert string dates from Elasticsearch to datetime objects"""
@@ -307,7 +307,7 @@ class Repository:
         logging.debug("Repository name: %s", self.name)
         logging.debug("Repository id: %s", self.docid)
         logging.debug("Repository body: %s", self.to_dict())
-        es.update(index=STATUS_INDEX, id=self.docid, body={"doc": self.to_dict()})
+        es.update(index=STATUS_INDEX, id=self.docid, doc=self.to_dict())
 
 
 @dataclass
@@ -344,9 +344,9 @@ class Settings:
     provider: str = "aws"
     rotate_by: str = "path"
     style: str = "oneup"
-    last_suffix: str = None
-    ilm_policy_name: str = None
-    index_template_name: str = None
+    last_suffix: Optional[str] = None
+    ilm_policy_name: Optional[str] = None
+    index_template_name: Optional[str] = None
     thaw_request_retention_days_completed: int = 7
     thaw_request_retention_days_failed: int = 30
     thaw_request_retention_days_refrozen: int = 35

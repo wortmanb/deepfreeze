@@ -2,7 +2,7 @@
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from ..orchestration.orchestrator import DeepfreezeOrchestrator
 from .deps import get_orchestrator
@@ -67,7 +67,7 @@ async def get_ilm_policies(
 
 @router.get("/history")
 async def get_action_history(
-    limit: int = 25,
+    limit: int = Query(default=25, ge=1, le=500),
     orch: DeepfreezeOrchestrator = Depends(get_orchestrator),
 ):
     """Get recent action history."""
@@ -90,7 +90,7 @@ async def get_restore_progress(
 
 @router.get("/audit")
 async def get_audit_log(
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=500),
     action: str | None = None,
     orch: DeepfreezeOrchestrator = Depends(get_orchestrator),
 ):

@@ -95,7 +95,7 @@ class TestAuditLogger:
         # Verify document structure
         call_args = mock_client.index.call_args
         assert call_args[1]["index"] == AUDIT_INDEX
-        doc = call_args[1]["body"]
+        doc = call_args[1]["document"]
         assert doc["action"] == "rotate"
         assert doc["dry_run"] is False
         assert doc["success"] is True
@@ -280,7 +280,7 @@ class TestAuditContextManager:
         # Verify log_action was called via commit
         mock_client.index.assert_called_once()
         call_args = mock_client.index.call_args
-        doc = call_args[1]["body"]
+        doc = call_args[1]["document"]
         assert doc["action"] == "rotate"
         assert doc["success"] is True
         assert len(doc["results"]) == 1
@@ -302,7 +302,7 @@ class TestAuditContextManager:
         # Verify log_action was called even though exception was raised
         mock_client.index.assert_called_once()
         call_args = mock_client.index.call_args
-        doc = call_args[1]["body"]
+        doc = call_args[1]["document"]
         assert doc["action"] == "rotate"
         assert doc["success"] is False  # Marked as failed due to exception
 

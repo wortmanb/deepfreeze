@@ -313,7 +313,7 @@ class TestRepositoryElasticsearchInteraction:
         call_kwargs = mock_client.update.call_args[1]
         assert call_kwargs["index"] == "deepfreeze-status"
         assert call_kwargs["id"] == "doc-456"
-        assert "doc" in call_kwargs["body"]
+        assert "doc" in call_kwargs
 
 
 class TestDeepfreezeClass:
