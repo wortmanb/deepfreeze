@@ -281,53 +281,76 @@ class TestSPAFallback:
     def test_missing_api_route_returns_json_404(self):
         from deepfreeze_server.app import create_app
 
-        # Create a real app (no frontend build dir exists, but test the logic)
-        # We test via the _API_PREFIXES matching in serve_spa
         import tempfile
         from pathlib import Path
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create minimal frontend build
-            build_dir = Path(tmpdir) / "static"
+            # Create a minimal frontend build so the SPA catch-all route is registered.
+            build_dir = Path(tmpdir) / "pkg_static"
             build_dir.mkdir()
             (build_dir / "assets").mkdir()
             index = build_dir / "index.html"
             index.write_text("<html><body>SPA</body></html>")
 
-            with patch(
-                "deepfreeze_server.app.Path.__new__",
-            ):
-                # Simulate by calling the app factory and checking route behavior
-                # Instead, test the route matching logic directly
-                from deepfreeze_server.app import _API_PREFIXES
+            real_new = Path.__new__
+
+            def fake_new(cls, *args, **kwargs):
+                path = real_new(cls, *args, **kwargs)
+                text = str(args[0]) if args else ""
+                if text.endswith("deepfreeze_server/static"):
+                    return real_new(cls, str(build_dir))
+                return path
+
+            with patch("pathlib.Path.__new__", side_effect=fake_new):
+                app = create_app(config_path=None)
+                client = TestClient(app, raise_server_exceptions=False)
 
                 test_paths = [
-                    "api/status/missing",
-                    "api/actions/nonexistent",
-                    "health",
-                    "ready",
-                    "docs",
-                    "openapi.json",
-                    "redoc",
+                    "/api/status/missing",
+                    "/api/actions/nonexistent",
+                    "/health/missing",
+                    "/ready/missing",
+                    "/docs/missing",
+                    "/openapi.json/missing",
+                    "/redoc/missing",
                 ]
                 for path in test_paths:
-                    matches = any(
-                        path == p.lstrip("/")
-                        or path.startswith(p.lstrip("/") + "/")
-                        for p in _API_PREFIXES
-                    )
-                    assert matches, f"/{path} should match API prefixes and get a 404"
+                    resp = client.get(path)
+                    assert resp.status_code == 404
+                    assert resp.headers["content-type"].startswith("application/json")
+                    assert resp.json()["detail"] == f"Not found: {path}"
 
     def test_non_api_path_does_not_match_prefixes(self):
-        from deepfreeze_server.app import _API_PREFIXES
+        from deepfreeze_server.app import create_app
 
-        non_api_paths = ["dashboard", "settings", ""]
-        for path in non_api_paths:
-            matches = any(
-                path == p.lstrip("/") or path.startswith(p.lstrip("/") + "/")
-                for p in _API_PREFIXES
-            )
-            assert not matches, f"/{path} should NOT match API prefixes"
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            build_dir = Path(tmpdir) / "pkg_static"
+            build_dir.mkdir()
+            (build_dir / "assets").mkdir()
+            index = build_dir / "index.html"
+            index.write_text("<html><body>SPA</body></html>")
+
+            real_new = Path.__new__
+
+            def fake_new(cls, *args, **kwargs):
+                path = real_new(cls, *args, **kwargs)
+                text = str(args[0]) if args else ""
+                if text.endswith("deepfreeze_server/static"):
+                    return real_new(cls, str(build_dir))
+                return path
+
+            with patch("pathlib.Path.__new__", side_effect=fake_new):
+                app = create_app(config_path=None)
+                client = TestClient(app, raise_server_exceptions=False)
+
+                for path in ["/dashboard", "/settings", "/"]:
+                    resp = client.get(path)
+                    assert resp.status_code == 200
+                    assert resp.headers["content-type"].startswith("text/html")
+                    assert "Not found:" not in resp.text
 
 
 class TestHostDefaults:
