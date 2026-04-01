@@ -24,14 +24,37 @@ Deepfreeze, and you think it will take more than a few minutes to produce the fi
 developers first! You can reach us via
 [github](https://github.com/elastic/deepfreeze/issues).
 
+## Development Setup
+
+```bash
+git clone https://github.com/elastic/deepfreeze.git
+cd deepfreeze
+./install.sh --dev
+```
+
+Or install manually:
+
+```bash
+pip install -e packages/deepfreeze-core[dev]
+pip install -e packages/deepfreeze-cli[dev]
+pip install -e packages/deepfreeze-server[dev]
+```
+
 ## Contribution Steps
 
-1. Test your changes! Run the test suite ('pytest --cov=deepfreeze').  Please note
-   that this requires an Elasticsearch instance. The tests will try to connect
-   to a local elasticsearch instance and run integration tests against it.
-   **This will delete all the data stored there!** You can use the env variable
-   `TEST_ES_SERVER` to point to a different instance (for example
-   'otherhost:9203').
+1. Test your changes! Run the unit test suite:
+   ```bash
+   pytest tests/cli/ -v
+   ```
+
+   Integration tests require a running Elasticsearch cluster and a config file.
+   Set `DEEPFREEZE_TEST_CONFIG` to point to your test config, or place it at
+   `~/.deepfreeze/config.yml`. **Integration tests may modify cluster state —
+   use a dedicated test cluster, not production.**
+   ```bash
+   DEEPFREEZE_TEST_CONFIG=/path/to/test-config.yml pytest tests/integration/ -v -m integration
+   ```
+
 2. Please make sure you have signed our [Contributor License
    Agreement](http://www.elastic.co/contributor-agreement/). We are not
    asking you to assign copyright to us, but to give us the right to distribute

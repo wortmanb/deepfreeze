@@ -1,5 +1,6 @@
 """FastAPI application factory for the deepfreeze server."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -86,14 +87,14 @@ def create_app(
 
     Args:
         config_path: Path to deepfreeze config file.
-        cors_origins: Allowed CORS origins. Defaults to ["*"].
+        cors_origins: Allowed CORS origins. Defaults to [] (none).
     """
     server_config, raw_config = load_server_config(config_path)
 
     app = FastAPI(
         title="Deepfreeze Server",
         description="Deepfreeze persistent daemon — REST API, job management, and SSE events",
-        version="2.0.0",
+        version="2.0.2",
         lifespan=lifespan,
     )
 
@@ -104,6 +105,12 @@ def create_app(
     app.state.auth_config = server_config.auth
 
     # Auth middleware — no-op when no tokens configured
+    if not server_config.auth.tokens:
+        logging.getLogger("deepfreeze.server").warning(
+            "No auth tokens configured — API is running in OPEN MODE. "
+            "All endpoints are accessible without authentication. "
+            "Configure server.auth.tokens in your config file for production use."
+        )
     app.add_middleware(AuthMiddleware)
 
     # API routes
@@ -137,9 +144,10 @@ def create_app(
                 for p in _API_PREFIXES
             ):
                 return FileResponse(index_html)  # let FastAPI 404 naturally
-            file_path = frontend_build / full_path
-            if full_path and file_path.is_file():
-                return FileResponse(file_path)
+            if full_path:
+                resolved = (frontend_build / full_path).resolve()
+                if resolved.is_file() and resolved.is_relative_to(frontend_build.resolve()):
+                    return FileResponse(resolved)
             return FileResponse(index_html)
 
     # CORS

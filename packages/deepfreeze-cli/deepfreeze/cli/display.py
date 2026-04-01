@@ -149,4 +149,4 @@ def display_job_submitted(data: dict) -> None:
     job_id = data.get("job_id", data.get("id", "unknown"))
     status = data.get("status", "unknown")
     console.print(f"[yellow]Job {job_id} submitted ({status})[/yellow]")
-    console.print(f"  Check progress: deepfreeze jobs {job_id}")
+    console.print(f"  Check progress via the Web UI or REST API: GET /api/jobs/{job_id}")

@@ -1,6 +1,6 @@
 # Deepfreeze
 
-[![Tests](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml/badge.svg)](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml)
+[![Tests](https://github.com/elastic/deepfreeze/actions/workflows/test.yml/badge.svg)](https://github.com/elastic/deepfreeze/actions/workflows/test.yml)
 
 Elasticsearch cloud storage archival and lifecycle management.
 
@@ -127,7 +127,7 @@ pip install packages/deepfreeze-core[azure,gcp]
      hosts:
        - https://localhost:9200
      username: elastic
-     password: changeme
+     password: changeme      # Replace with your actual password
 
    # Storage provider credentials (optional - can also use environment variables)
    storage:
@@ -137,19 +137,21 @@ pip install packages/deepfreeze-core[azure,gcp]
        # profile: my-profile  # Or use access_key_id + secret_access_key
 
      # Azure Blob Storage
-     azure:
-       connection_string: "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=..."
-       # Or use account_name + account_key
+     # azure:
+     #   connection_string: "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=..."
 
      # Google Cloud Storage
-     gcp:
-       project: my-gcp-project
-       credentials_file: /path/to/service-account.json
+     # gcp:
+     #   project: my-gcp-project
+     #   credentials_file: /path/to/service-account.json
    ```
+
+   > **Important:** Set file permissions to restrict access:
+   > `chmod 600 ~/.deepfreeze/config.yml`
 
 3. **Initialize deepfreeze** (required — creates ILM policies, index templates, and snapshot repos):
    ```bash
-   deepfreeze setup --config ~/.deepfreeze/config.yml \
+   deepfreeze --config ~/.deepfreeze/config.yml setup \
      --provider aws \
      --bucket_name_prefix my-deepfreeze \
      --repo_name_prefix my-deepfreeze
@@ -157,13 +159,17 @@ pip install packages/deepfreeze-core[azure,gcp]
 
 4. **Check status** (only works after `setup` has been run):
    ```bash
-   deepfreeze status --config ~/.deepfreeze/config.yml
+   deepfreeze --config ~/.deepfreeze/config.yml status
    ```
 
-5. **Start the server** (optional):
+5. **Start the server** (optional — binds to 127.0.0.1 by default):
    ```bash
    deepfreeze-server --config ~/.deepfreeze/config.yml
    ```
+
+   > **Security:** The server runs without authentication by default. For
+   > production use, configure `server.auth.tokens` in your config file.
+   > To listen on all interfaces, set `server.host: 0.0.0.0` explicitly.
 
 ## Development
 

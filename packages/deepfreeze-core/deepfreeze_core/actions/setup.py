@@ -197,65 +197,66 @@ class Setup:
                 }
             )
 
-        # Fourth, check if the index template exists
-        self.loggit.debug(
-            "Checking if index template %s exists", self.index_template_name
-        )
-        template_exists = False
-        template_type = None
-
-        # Check composable templates first (ES 7.8+)
-        try:
-            templates = self.client.indices.get_index_template(
-                name=self.index_template_name
+        # Fourth, check if the index template exists (only when specified)
+        if self.index_template_name:
+            self.loggit.debug(
+                "Checking if index template %s exists", self.index_template_name
             )
-            if (
-                templates
-                and "index_templates" in templates
-                and len(templates["index_templates"]) > 0
-            ):
-                template_exists = True
-                template_type = "composable"
-                self.loggit.debug(
-                    "Found composable template %s", self.index_template_name
-                )
-        except Exception:
-            pass  # Template not found as composable, try legacy
+            template_exists = False
+            template_type = None
 
-        # Check legacy templates if not found as composable
-        if not template_exists:
+            # Check composable templates first (ES 7.8+)
             try:
-                templates = self.client.indices.get_template(
+                templates = self.client.indices.get_index_template(
                     name=self.index_template_name
                 )
-                if templates and self.index_template_name in templates:
+                if (
+                    templates
+                    and "index_templates" in templates
+                    and len(templates["index_templates"]) > 0
+                ):
                     template_exists = True
-                    template_type = "legacy"
+                    template_type = "composable"
                     self.loggit.debug(
-                        "Found legacy template %s", self.index_template_name
+                        "Found composable template %s", self.index_template_name
                     )
             except Exception:
-                pass  # Template not found
+                pass  # Template not found as composable, try legacy
 
-        if not template_exists:
-            errors.append(
-                {
-                    "issue": f"Index template [cyan]{self.index_template_name}[/cyan] does not exist",
-                    "solution": "Create the index template before running setup:\n"
-                    f"  [yellow]PUT _index_template/{self.index_template_name}[/yellow]\n"
-                    "  with appropriate index_patterns, mappings, and settings.\n\n"
-                    "Example:\n"
-                    "  [yellow]curl -X PUT 'http://<host>:9200/_index_template/"
-                    f"{self.index_template_name}' -H 'Content-Type: application/json' -d '[/yellow]\n"
-                    '  [yellow]{"index_patterns": ["your-data-*"], "template": {"settings": {}}}\'[/yellow]',
-                }
-            )
-        else:
-            self.loggit.info(
-                "Index template %s exists (type: %s)",
-                self.index_template_name,
-                template_type,
-            )
+            # Check legacy templates if not found as composable
+            if not template_exists:
+                try:
+                    templates = self.client.indices.get_template(
+                        name=self.index_template_name
+                    )
+                    if templates and self.index_template_name in templates:
+                        template_exists = True
+                        template_type = "legacy"
+                        self.loggit.debug(
+                            "Found legacy template %s", self.index_template_name
+                        )
+                except Exception:
+                    pass  # Template not found
+
+            if not template_exists:
+                errors.append(
+                    {
+                        "issue": f"Index template [cyan]{self.index_template_name}[/cyan] does not exist",
+                        "solution": "Create the index template before running setup:\n"
+                        f"  [yellow]PUT _index_template/{self.index_template_name}[/yellow]\n"
+                        "  with appropriate index_patterns, mappings, and settings.\n\n"
+                        "Example:\n"
+                        "  [yellow]curl -X PUT 'http://<host>:9200/_index_template/"
+                        f"{self.index_template_name}' -H 'Content-Type: application/json' -d '[/yellow]\n"
+                        '  [yellow]{"index_patterns": ["your-data-*"], "template": {"settings": {}}}\'[/yellow]',
+                    }
+                )
+            else:
+                self.loggit.info(
+                    "Index template %s exists (type: %s)",
+                    self.index_template_name,
+                    template_type,
+                )
 
         # Fifth, check for repository plugin based on provider
         # NOTE: Elasticsearch 8.x+ has built-in repository support for all providers

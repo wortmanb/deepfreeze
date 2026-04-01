@@ -287,7 +287,7 @@ if yaml is not None:
         "logging": {"loglevel": "INFO"},
     }
     if not cli_only and server_port:
-        cfg["server"] = {"host": "0.0.0.0", "port": int(server_port)}
+        cfg["server"] = {"host": "127.0.0.1", "port": int(server_port)}
 
     header = (
         f"# Deepfreeze Configuration\n"
@@ -313,7 +313,7 @@ else:
         "  loglevel: INFO",
     ]
     if not cli_only and server_port:
-        lines += ["", "server:", f"  host: 0.0.0.0", f"  port: {server_port}"]
+        lines += ["", "server:", f"  host: 127.0.0.1", f"  port: {server_port}"]
     with open(config_path, "w") as fh:
         fh.write("\n".join(lines) + "\n")
 PYEOF
@@ -347,8 +347,9 @@ try:
         token = base64.b64encode(f"{user}:{pw}".encode()).decode()
         req.add_header("Authorization", f"Basic {token}")
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ca = es.get("ca_certs")
+    if ca:
+        ctx.load_verify_locations(ca)
     urllib.request.urlopen(req, context=ctx, timeout=5)
     sys.exit(0)
 except Exception:

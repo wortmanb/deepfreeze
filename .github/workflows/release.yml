@@ -20,24 +20,30 @@ jobs:
       run: |
         CORE_VERSION=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('packages/deepfreeze-core/deepfreeze_core/__init__.py').read()).group(1))")
         CLI_VERSION=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('packages/deepfreeze-cli/deepfreeze/__init__.py').read()).group(1))")
+        SERVER_VERSION=$(python -c "import re; print(re.search(r'__version__ = \"([^\"]+)\"', open('packages/deepfreeze-server/deepfreeze_server/__init__.py').read()).group(1))")
         TAG_VERSION=${GITHUB_REF#refs/tags/v}
         TAG_VERSION=${TAG_VERSION%%-*}   # strip pre-release suffix (e.g. -RC1, -alpha1)
 
         echo "Core version: $CORE_VERSION"
         echo "CLI version: $CLI_VERSION"
+        echo "Server version: $SERVER_VERSION"
         echo "Tag version: $TAG_VERSION"
 
+        MISMATCH=false
         if [ "$CORE_VERSION" != "$CLI_VERSION" ]; then
-          echo "ERROR: Version mismatch between packages!"
-          echo "  deepfreeze-core: $CORE_VERSION"
-          echo "  deepfreeze-cli: $CLI_VERSION"
-          exit 1
+          echo "ERROR: Version mismatch: core=$CORE_VERSION cli=$CLI_VERSION"
+          MISMATCH=true
+        fi
+        if [ "$CORE_VERSION" != "$SERVER_VERSION" ]; then
+          echo "ERROR: Version mismatch: core=$CORE_VERSION server=$SERVER_VERSION"
+          MISMATCH=true
+        fi
+        if [ "$CORE_VERSION" != "$TAG_VERSION" ]; then
+          echo "ERROR: Version doesn't match git tag: code=$CORE_VERSION tag=$TAG_VERSION"
+          MISMATCH=true
         fi
 
-        if [ "$CORE_VERSION" != "$TAG_VERSION" ]; then
-          echo "ERROR: Version doesn't match git tag!"
-          echo "  Code version: $CORE_VERSION"
-          echo "  Tag version: $TAG_VERSION"
+        if [ "$MISMATCH" = true ]; then
           exit 1
         fi
 

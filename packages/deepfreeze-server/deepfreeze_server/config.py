@@ -48,9 +48,9 @@ class AuthConfig(BaseModel):
 class ServerConfig(BaseModel):
     """Top-level server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
-    cors_origins: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = Field(default_factory=list)
     refresh_interval: float = 30.0
     scheduled_jobs: list[ScheduledJobConfig] = Field(default_factory=list)
     auth: AuthConfig = Field(default_factory=AuthConfig)
@@ -62,7 +62,9 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
 
     The raw dict is passed to deepfreeze-core for ES client creation.
     Environment variables override YAML values:
-        DEEPFREEZE_HOST, DEEPFREEZE_PORT, DEEPFREEZE_CORS_ORIGINS
+        DEEPFREEZE_HOST          — server bind address (default: 127.0.0.1)
+        DEEPFREEZE_PORT          — server port (default: 8000)
+        DEEPFREEZE_CORS_ORIGINS  — comma-separated list of allowed CORS origins
     """
     raw: dict[str, Any] = {}
     path = config_path or (str(DEFAULT_CONFIG_PATH) if DEFAULT_CONFIG_PATH.is_file() else None)
@@ -99,9 +101,9 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
         tls_config = TLSConfig(cert=raw_tls["cert"], key=raw_tls["key"])
 
     server = ServerConfig(
-        host=os.environ.get("DEEPFREEZE_HOST", server_section.get("host", "0.0.0.0")),
+        host=os.environ.get("DEEPFREEZE_HOST", server_section.get("host", "127.0.0.1")),
         port=int(os.environ.get("DEEPFREEZE_PORT", server_section.get("port", 8000))),
-        cors_origins=server_section.get("cors_origins", ["*"]),
+        cors_origins=os.environ.get("DEEPFREEZE_CORS_ORIGINS", "").split(",") if os.environ.get("DEEPFREEZE_CORS_ORIGINS") else server_section.get("cors_origins", []),
         refresh_interval=float(server_section.get("refresh_interval", 30.0)),
         scheduled_jobs=scheduled_jobs,
         auth=auth_config,

@@ -364,7 +364,7 @@ class Refreeze:
                         tracker.add_result(
                             {
                                 "type": "thaw_request",
-                                "action": "would_refeeze",
+                                "action": "would_refreeze",
                                 "target": req.get("request_id"),
                                 "status": "dry_run",
                             }

@@ -9,6 +9,7 @@ When no tokens are configured, all requests are allowed (open mode).
 """
 
 import logging
+import secrets
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -19,7 +20,7 @@ from ..config import AuthConfig
 logger = logging.getLogger("deepfreeze.server.auth")
 
 # Paths that never require auth
-_PUBLIC_PATHS = {"/health", "/ready", "/docs", "/openapi.json", "/redoc", "/api/auth/login"}
+_PUBLIC_PATHS = {"/health", "/ready", "/api/auth/login"}
 
 # Role → allowed path patterns
 # More specific checks: admin gets everything, operator gets actions + read,
@@ -107,7 +108,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Look up configured API token
         matched = None
         for t in auth_config.tokens:
-            if t.token == token_value:
+            if secrets.compare_digest(t.token, token_value):
                 matched = t
                 break
 
