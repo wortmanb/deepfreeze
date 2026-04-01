@@ -18,16 +18,20 @@ Description=Deepfreeze Repository Rotation
 Documentation=https://github.com/elastic/deepfreeze
 After=network-online.target
 Wants=network-online.target
+ConditionPathExists=/usr/local/bin/deepfreeze
+ConditionPathExists=/etc/deepfreeze/config.yml
 
 [Service]
 Type=oneshot
 User=elasticsearch
 Group=elasticsearch
+UMask=0077
 
 # Adjust the path to your deepfreeze installation
 ExecStart=/usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6
 
-# Environment variables (if needed for AWS credentials)
+# Prefer workload identity or instance roles over static credentials.
+# If an environment file is required, keep it root-owned and mode 0600.
 # Environment=AWS_PROFILE=default
 # EnvironmentFile=/etc/deepfreeze/env
 
@@ -41,6 +45,13 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
 
 [Install]
 WantedBy=multi-user.target

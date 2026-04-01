@@ -70,18 +70,28 @@ elasticsearch:
 
 # Optional — server-specific settings
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1          # use 0.0.0.0 to listen on all interfaces
   port: 8000
-  cors_origins:
-    - "*"
-  refresh_interval: 30.0   # status cache refresh in seconds
+  cors_origins: []          # add origins as needed, e.g. ["http://localhost:5173"]
+  refresh_interval: 30.0    # status cache refresh in seconds
+
+  # Authentication (recommended for production)
+  auth:
+    tokens:
+      - name: my-admin-token
+        token: "replace-with-a-long-random-string"
+        roles: [admin]
+    # Optional: allow users to log in with Elasticsearch credentials
+    # es_login:
+    #   enabled: true
+    #   default_role: viewer   # viewer, operator, or admin
 ```
 
 Environment variable overrides:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEEPFREEZE_HOST` | `0.0.0.0` | Bind address |
+| `DEEPFREEZE_HOST` | `127.0.0.1` | Bind address |
 | `DEEPFREEZE_PORT` | `8000` | Listen port |
 
 ## CLI Options
@@ -93,8 +103,56 @@ deepfreeze-server [OPTIONS]
   --host HOST           Bind address (overrides config/env)
   --port, -p PORT       Listen port (overrides config/env)
   --reload              Enable auto-reload for development
-  --cors-origin URL     Allowed CORS origin (repeatable, default: *)
+  --cors-origin URL     Allowed CORS origin (repeatable)
 ```
+
+## Authentication
+
+The server supports three authentication modes:
+
+### Open mode (default)
+
+When no `server.auth.tokens` are configured, all endpoints are accessible without authentication. A warning is logged at startup. Suitable for local development only.
+
+### Token-based authentication
+
+Configure static API tokens with explicit roles in `config.yml`:
+
+```yaml
+server:
+  auth:
+    tokens:
+      - name: admin-token
+        token: "your-secret-token"
+        roles: [admin]
+      - name: readonly-token
+        token: "another-secret-token"
+        roles: [viewer]
+```
+
+Pass the token via `Authorization: Bearer <token>` header.
+
+**Roles:**
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | Full access to all endpoints |
+| `operator` | Actions + read, but not setup or scheduler management |
+| `viewer` | Read-only (status, jobs, events, health) |
+
+### Elasticsearch login (opt-in)
+
+Users can authenticate with their ES credentials when explicitly enabled:
+
+```yaml
+server:
+  auth:
+    es_login:
+      enabled: true
+      default_role: viewer   # viewer, operator, or admin
+```
+
+ES-authenticated sessions receive the `default_role` — they do **not** receive admin privileges automatically. The `/api/auth/login` endpoint returns a session token valid for 8 hours.
 
 ## API Reference
 

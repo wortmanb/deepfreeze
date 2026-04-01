@@ -1,5 +1,5 @@
 # Deepfreeze Rotate Timer
-# This systemd timer triggers the deepfreeze-rotate.service every 30 days.
+# This systemd timer triggers the deepfreeze-rotate.service monthly.
 #
 # Installation:
 #   1. Copy deepfreeze-rotate.service to /etc/systemd/system/
@@ -16,14 +16,14 @@
 #   journalctl -u deepfreeze-rotate.service
 
 [Unit]
-Description=Run Deepfreeze Rotation Every 30 Days
+Description=Run Deepfreeze Rotation Monthly
 Documentation=https://github.com/elastic/deepfreeze
 
 [Timer]
-# Run every 30 days
-OnCalendar=*-*-01,31 02:00:00
-# Alternative: Run on a fixed schedule (1st of every month at 2 AM)
-# OnCalendar=*-*-01 02:00:00
+# Run on the 1st of every month at 2 AM.
+# If you need strict elapsed-time intervals instead of calendar-based runs,
+# replace this with OnUnitActiveSec=30d and verify the behavior you want.
+OnCalendar=*-*-01 02:00:00
 
 # Randomize start time by up to 1 hour to avoid thundering herd
 RandomizedDelaySec=3600

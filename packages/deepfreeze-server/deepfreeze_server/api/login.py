@@ -102,7 +102,16 @@ async def login(body: LoginRequest, request: Request):
     """Authenticate against Elasticsearch and return a session token.
 
     Accepts either username/password or an ES API key.
+    ES login must be explicitly enabled in the server config via
+    ``server.auth.es_login.enabled: true``.
     """
+    auth_config = getattr(request.app.state, "auth_config", None)
+    if not auth_config or not auth_config.es_login.enabled:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Elasticsearch login is not enabled on this server"},
+        )
+
     client_ip = request.client.host if request.client else "unknown"
     if not _check_rate_limit(client_ip):
         logger.warning("Login rate limit exceeded for %s", client_ip)
@@ -148,11 +157,13 @@ async def login(body: LoginRequest, request: Request):
             content={"detail": "Invalid Elasticsearch credentials"},
         )
 
-    # Create session
+    # Create session with the configured default role
+    default_role = auth_config.es_login.default_role
     token = f"dfs_{secrets.token_urlsafe(32)}"
     now = time.time()
     _sessions[token] = {
         "username": es_username,
+        "role": default_role,
         "authenticated_at": now,
         "expires_at": now + SESSION_TTL,
     }

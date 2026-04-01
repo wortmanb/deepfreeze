@@ -36,7 +36,7 @@ classifiers = [
     "Topic :: Database",
 ]
 dependencies = [
-    "deepfreeze-core>=1.0.0",
+    "deepfreeze-core>=2.0.2,<3.0.0",
     "click>=8.0.0",
     "voluptuous>=0.14.0",
     "pyyaml>=6.0.0",

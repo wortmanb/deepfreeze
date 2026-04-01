@@ -39,10 +39,23 @@ class TLSConfig(BaseModel):
     key: str  # path to private key file
 
 
+class ESLoginConfig(BaseModel):
+    """Elasticsearch-backed login configuration.
+
+    When enabled, users can authenticate with their ES credentials via
+    POST /api/auth/login.  The default_role controls what privileges
+    ES-authenticated sessions receive (viewer, operator, or admin).
+    """
+
+    enabled: bool = False
+    default_role: str = "viewer"
+
+
 class AuthConfig(BaseModel):
     """Authentication configuration."""
 
     tokens: list[AuthTokenConfig] = Field(default_factory=list)
+    es_login: ESLoginConfig = Field(default_factory=ESLoginConfig)
 
 
 class ServerConfig(BaseModel):
@@ -92,7 +105,12 @@ def load_server_config(config_path: str | None = None) -> tuple[ServerConfig, di
     for t in raw_auth.get("tokens", []):
         if isinstance(t, dict) and "name" in t and "token" in t:
             auth_tokens.append(AuthTokenConfig(**t))
-    auth_config = AuthConfig(tokens=auth_tokens)
+    raw_es_login = raw_auth.get("es_login", {})
+    es_login_config = ESLoginConfig(
+        enabled=raw_es_login.get("enabled", False),
+        default_role=raw_es_login.get("default_role", "viewer"),
+    )
+    auth_config = AuthConfig(tokens=auth_tokens, es_login=es_login_config)
 
     # Parse TLS config
     tls_config = None

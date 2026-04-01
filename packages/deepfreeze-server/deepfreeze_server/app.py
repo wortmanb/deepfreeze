@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from deepfreeze_core.esclient import create_es_client
@@ -143,7 +143,10 @@ def create_app(
                 full_path == p.lstrip("/") or full_path.startswith(p.lstrip("/") + "/")
                 for p in _API_PREFIXES
             ):
-                return FileResponse(index_html)  # let FastAPI 404 naturally
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": f"Not found: /{full_path}"},
+                )
             if full_path:
                 resolved = (frontend_build / full_path).resolve()
                 if resolved.is_file() and resolved.is_relative_to(frontend_build.resolve()):

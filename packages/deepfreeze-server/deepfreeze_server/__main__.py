@@ -24,7 +24,7 @@ def main():
     )
     parser.add_argument(
         "--host",
-        help="Host to bind to (default: 0.0.0.0)",
+        help="Host to bind to (default: 127.0.0.1)",
         default=None,
     )
     parser.add_argument(

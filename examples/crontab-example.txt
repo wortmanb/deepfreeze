@@ -11,6 +11,11 @@
 #   Option 2: Add to system crontab
 #     sudo vi /etc/cron.d/deepfreeze-rotate
 #     # Paste the desired line below (include username field)
+#
+# Security notes:
+#   - Do not paste access keys, passwords, or tokens directly into crontab.
+#   - Prefer instance/workload identity, named profiles, or a root-owned env file.
+#   - Use absolute paths because cron runs with a minimal environment.
 
 # -----------------------------------------------------------------------------
 # OPTION 1: Run on the 1st of every month at 2:00 AM (RECOMMENDED)
@@ -25,10 +30,10 @@
 # 0 2 1,15 * * /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6
 
 # -----------------------------------------------------------------------------
-# OPTION 3: Run every 30 days using day-of-year calculation
-# This script-based approach gives true 30-day intervals.
+# OPTION 3: Run weekly on Sunday at 2:00 AM
+# Use this only if your retention policy expects more frequent rotation.
 # -----------------------------------------------------------------------------
-# 0 2 * * * [ $(( $(date +\%j) \% 30 )) -eq 0 ] && /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6
+# 0 2 * * 0 /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6
 
 # -----------------------------------------------------------------------------
 # SYSTEM CRONTAB FORMAT (for /etc/cron.d/deepfreeze-rotate)
@@ -38,13 +43,13 @@
 
 # -----------------------------------------------------------------------------
 # WITH LOGGING
-# Append output to a log file for debugging.
+# Send output to syslog/journald instead of creating ad-hoc world-readable logs.
 # -----------------------------------------------------------------------------
-# 0 2 1 * * /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6 >> /var/log/deepfreeze/rotate.log 2>&1
+# 0 2 1 * * /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6 2>&1 | /usr/bin/logger -t deepfreeze-rotate
 
 # -----------------------------------------------------------------------------
 # WITH ENVIRONMENT VARIABLES
-# Set AWS credentials or other environment variables.
+# A named profile is acceptable. Do not store raw secrets in crontab.
 # -----------------------------------------------------------------------------
 # AWS_PROFILE=default
 # 0 2 1 * * /usr/local/bin/deepfreeze --config /etc/deepfreeze/config.yml rotate --keep 6

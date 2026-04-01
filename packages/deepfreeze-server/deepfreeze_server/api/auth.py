@@ -100,9 +100,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         session = get_session(token_value)
         if session:
-            # ES-authenticated session — grant full access (admin equivalent)
+            session_roles = [session.get("role", "viewer")]
             request.state.auth_name = session["username"]
-            request.state.auth_roles = ["admin"]
+            request.state.auth_roles = session_roles
+            if not _role_allows(session_roles, method, path):
+                logger.warning(
+                    "ES session user '%s' (role=%s) denied access to %s %s",
+                    session["username"], session_roles, method, path,
+                )
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": f"Insufficient permissions (role: {session_roles})"},
+                )
             return await call_next(request)
 
         # Look up configured API token
