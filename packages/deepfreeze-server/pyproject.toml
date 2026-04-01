@@ -49,6 +49,13 @@ artifacts = ["deepfreeze_server/static/**"]
 [tool.hatch.build.targets.sdist]
 include = ["deepfreeze_server", "frontend"]
 
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501", "B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

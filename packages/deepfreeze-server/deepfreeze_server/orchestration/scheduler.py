@@ -18,9 +18,8 @@ from typing import TYPE_CHECKING, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from elasticsearch8 import NotFoundError
-
 from deepfreeze_core.constants import STATUS_INDEX
+from elasticsearch8 import NotFoundError
 
 from ..config import ScheduledJobConfig
 from ..models.events import Event, EventChannel, EventType

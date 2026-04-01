@@ -1,7 +1,5 @@
 """Structured error models and exception mapping."""
 
-from pydantic import BaseModel
-
 from deepfreeze_core.exceptions import (
     ActionError,
     DeepfreezeException,
@@ -10,6 +8,7 @@ from deepfreeze_core.exceptions import (
     PreconditionError,
     RepositoryException,
 )
+from pydantic import BaseModel
 
 
 class ServiceError(BaseModel):

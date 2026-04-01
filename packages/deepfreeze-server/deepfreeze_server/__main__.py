@@ -69,6 +69,7 @@ def main():
     port = args.port or server_config.port
 
     import uvicorn
+
     from .app import create_app
 
     app = create_app(config_path=config_path, cors_origins=args.cors_origins)

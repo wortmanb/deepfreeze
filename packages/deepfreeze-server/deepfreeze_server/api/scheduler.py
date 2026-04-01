@@ -45,7 +45,7 @@ async def add_scheduled_job(
         result = orch.scheduler.add_job(cfg)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from None
 
 
 @router.put("/scheduler/jobs/{name}")
@@ -66,7 +66,7 @@ async def update_scheduled_job(
         result = orch.scheduler.update_job(name, cfg)
         return result
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from None
 
 
 @router.delete("/scheduler/jobs/{name}")

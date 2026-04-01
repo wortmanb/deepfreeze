@@ -82,7 +82,7 @@ async def thaw_create(
         start = datetime.fromisoformat(body.start_date)
         end = datetime.fromisoformat(body.end_date)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}") from None
 
     submission = await orch.thaw_create(
         start_date=start,

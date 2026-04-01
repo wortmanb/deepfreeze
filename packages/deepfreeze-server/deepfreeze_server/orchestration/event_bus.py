@@ -50,7 +50,7 @@ class EventBus:
             subscribers = dict(self._subscribers)
 
         dropped = 0
-        for sub_id, queue in subscribers.items():
+        for _sub_id, queue in subscribers.items():
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:

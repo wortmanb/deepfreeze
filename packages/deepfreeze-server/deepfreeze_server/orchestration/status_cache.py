@@ -4,11 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from elasticsearch8 import Elasticsearch
-
 from deepfreeze_core.actions import Status
 from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.exceptions import MissingIndexError, MissingSettingsError
+from elasticsearch8 import Elasticsearch
 
 from ..models.errors import map_exception_to_error
 from ..models.status import ActionHistoryEntry, ClusterHealth, SystemStatus

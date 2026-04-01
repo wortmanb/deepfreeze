@@ -10,11 +10,10 @@ import logging
 import secrets
 import time
 
+from deepfreeze_core.esclient import create_es_client
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
-from deepfreeze_core.esclient import create_es_client
 
 logger = logging.getLogger("deepfreeze.server.login")
 

@@ -5,12 +5,11 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from deepfreeze_core.esclient import create_es_client
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
-from deepfreeze_core.esclient import create_es_client
 
 from .api import actions, events, health, jobs, login, scheduler, status
 from .api.auth import AuthMiddleware

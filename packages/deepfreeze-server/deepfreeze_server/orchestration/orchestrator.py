@@ -8,15 +8,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from elasticsearch8 import Elasticsearch
-
 from deepfreeze_core import (
     Cleanup,
     Refreeze,
     RepairMetadata,
     Rotate,
     Setup,
-    Status,
     Thaw,
 )
 from deepfreeze_core.audit import AuditLogger
@@ -27,6 +24,7 @@ from deepfreeze_core.utilities import (
     get_settings,
     get_thaw_request,
 )
+from elasticsearch8 import Elasticsearch
 
 from ..config import ScheduledJobConfig
 from ..models.commands import CommandResult
