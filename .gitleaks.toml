@@ -1,0 +1,17 @@
+title = "deepfreeze gitleaks config"
+
+[allowlist]
+description = "Intentional example placeholders used in docs and tests"
+regexes = [
+  '''changeme''',
+  '''base64-encoded-api-key''',
+  '''replace-with-a-long-random-string''',
+  '''your-secret-token''',
+  '''another-secret-token''',
+  '''admin-secret''',
+  '''viewer-secret''',
+  '''operator-secret''',
+  '''df_tok_changeme''',
+  '''df_tok_viewonly''',
+  '''df_tok_abc123''',
+]
