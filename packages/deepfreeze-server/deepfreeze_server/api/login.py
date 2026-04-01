@@ -5,11 +5,13 @@ by creating a temporary ES client and calling ``security.authenticate()``.
 On success a short-lived session token is returned and cached in memory.
 """
 
+import collections
 import logging
 import secrets
 import time
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from deepfreeze_core.esclient import create_es_client
@@ -22,6 +24,26 @@ router = APIRouter()
 _sessions: dict[str, dict] = {}
 
 SESSION_TTL = 8 * 60 * 60  # 8 hours
+
+# Per-IP login rate limiting
+_LOGIN_WINDOW = 60  # seconds
+_LOGIN_MAX_ATTEMPTS = 5  # max attempts per window per IP
+_login_attempts: dict[str, collections.deque] = {}
+
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if the request should be allowed, False if rate-limited."""
+    now = time.monotonic()
+    if ip not in _login_attempts:
+        _login_attempts[ip] = collections.deque()
+    window = _login_attempts[ip]
+    # Evict timestamps outside the window
+    while window and window[0] < now - _LOGIN_WINDOW:
+        window.popleft()
+    if len(window) >= _LOGIN_MAX_ATTEMPTS:
+        return False
+    window.append(now)
+    return True
 
 
 class LoginRequest(BaseModel):
@@ -81,7 +103,14 @@ async def login(body: LoginRequest, request: Request):
 
     Accepts either username/password or an ES API key.
     """
-    from fastapi.responses import JSONResponse
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        logger.warning("Login rate limit exceeded for %s", client_ip)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many login attempts. Try again later."},
+            headers={"Retry-After": str(_LOGIN_WINDOW)},
+        )
 
     raw_config: dict = request.app.state.raw_config
     es_kwargs = _build_es_kwargs(raw_config)
@@ -148,7 +177,6 @@ async def me(request: Request):
     if auth_name:
         return UserInfo(username=auth_name)
 
-    from fastapi.responses import JSONResponse
     return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
 
 

@@ -24,6 +24,7 @@ from deepfreeze.config import (
     get_elasticsearch_config,
     get_server_config,
     load_config,
+    validate_config,
 )
 
 today = datetime.today()
@@ -131,6 +132,8 @@ def cli(ctx, config_path, dry_run, local, server_url):
     # Load configuration
     try:
         config = load_config(config_path)
+        if config_path:
+            validate_config(config)
         ctx.obj["configdict"] = config
         ctx.obj["config_path"] = config_path
 
