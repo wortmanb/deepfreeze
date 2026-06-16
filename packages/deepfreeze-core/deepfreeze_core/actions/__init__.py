@@ -12,6 +12,7 @@ from deepfreeze_core.actions.rotate import Rotate
 from deepfreeze_core.actions.setup import Setup
 from deepfreeze_core.actions.status import Status
 from deepfreeze_core.actions.thaw import Thaw
+from deepfreeze_core.actions.update_date_ranges import UpdateDateRanges
 
 __all__ = [
     "Setup",
@@ -21,4 +22,5 @@ __all__ = [
     "Refreeze",
     "Cleanup",
     "RepairMetadata",
+    "UpdateDateRanges",
 ]

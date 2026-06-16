@@ -18,6 +18,7 @@ from deepfreeze_core import (
     Setup,
     Status,
     Thaw,
+    UpdateDateRanges,
 )
 from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.s3client import s3_client_factory
@@ -202,6 +203,17 @@ class DeepfreezeOrchestrator:
         )
         return await self._submit_action(
             "repair", action, dry_run=dry_run,
+            params={"dry_run": dry_run},
+        )
+
+    async def update_date_ranges(self, dry_run: bool = False) -> JobSubmission:
+        action = UpdateDateRanges(
+            client=self._client,
+            porcelain=True,
+            audit=self._audit,
+        )
+        return await self._submit_action(
+            "update_date_ranges", action, dry_run=dry_run,
             params={"dry_run": dry_run},
         )
 

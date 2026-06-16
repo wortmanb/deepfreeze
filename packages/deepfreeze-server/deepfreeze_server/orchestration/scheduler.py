@@ -328,6 +328,7 @@ class DeepfreezeScheduler:
             "cleanup": self._orch.cleanup,
             "repair": self._orch.repair_metadata,
             "refreeze": self._orch.refreeze,
+            "update_date_ranges": self._orch.update_date_ranges,
         }
 
         method = action_map.get(action)

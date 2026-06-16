@@ -17,6 +17,7 @@ from deepfreeze_core.actions import (
     Setup,
     Status,
     Thaw,
+    UpdateDateRanges,
 )
 
 # Export audit logging
@@ -159,6 +160,7 @@ __all__ = [
     "Setup",
     "Status",
     "Thaw",
+    "UpdateDateRanges",
     # Utilities
     "check_restore_status",
     "create_repo",

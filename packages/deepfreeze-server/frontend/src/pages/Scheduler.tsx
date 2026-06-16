@@ -72,6 +72,7 @@ const jobActions = [
   { value: 'thaw_check', text: 'Check Thaw Status' },
   { value: 'repair', text: 'Repair Metadata' },
   { value: 'refreeze', text: 'Refreeze' },
+  { value: 'update_date_ranges', text: 'Update Date Ranges' },
 ];
 
 const UNIT_SECONDS: Record<IntervalUnit, number> = {

@@ -18,6 +18,7 @@ from deepfreeze import (
     Setup,
     Status,
     Thaw,
+    UpdateDateRanges,
 )
 
 
@@ -627,12 +628,121 @@ class TestRepairMetadataAction:
                     assert mock_repos.call_count == 2
 
 
+class TestUpdateDateRangesAction:
+    """Tests for the UpdateDateRanges action class"""
+
+    def test_update_date_ranges_initialization(self):
+        """Test UpdateDateRanges action can be initialized"""
+        mock_client = MagicMock()
+        action = UpdateDateRanges(client=mock_client)
+
+        assert action.client == mock_client
+        assert action._results == []
+
+    def test_update_date_ranges_raises_missing_index_error(self):
+        """Test UpdateDateRanges raises MissingIndexError when status index missing"""
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = False
+
+        action = UpdateDateRanges(client=mock_client, porcelain=True)
+
+        with pytest.raises(MissingIndexError):
+            action.do_action()
+
+    def test_processes_all_mounted_repos_and_skips_unmounted(self):
+        """Mounted repos are processed (even with existing dates); unmounted skipped."""
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+
+        # repo1: mounted, already has dates -> should still be processed (extend)
+        repo1 = Repository(
+            name="deepfreeze-000001",
+            bucket="bucket1",
+            is_mounted=True,
+            start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        )
+        # repo2: mounted, no dates -> processed
+        repo2 = Repository(name="deepfreeze-000002", bucket="bucket2", is_mounted=True)
+        # repo3: unmounted -> skipped, never passed to the helper
+        repo3 = Repository(name="deepfreeze-000003", bucket="bucket3", is_mounted=False)
+
+        with patch(
+            "deepfreeze_core.actions.update_date_ranges.get_all_repos"
+        ) as mock_repos:
+            mock_repos.return_value = [repo1, repo2, repo3]
+
+            with patch(
+                "deepfreeze_core.actions.update_date_ranges.update_repository_date_range"
+            ) as mock_update:
+                # repo1 extended (True), repo2 unchanged (False)
+                mock_update.side_effect = [True, False]
+
+                action = UpdateDateRanges(client=mock_client, porcelain=True)
+                action.do_action()
+
+        # Only the two mounted repos hit the helper — unmounted never does.
+        assert mock_update.call_count == 2
+        mock_update.assert_any_call(mock_client, repo1)
+        mock_update.assert_any_call(mock_client, repo2)
+
+        by_repo = {r["repo"]: r for r in action._results}
+        assert by_repo["deepfreeze-000001"]["action"] == "updated"
+        assert by_repo["deepfreeze-000002"]["action"] == "unchanged"
+        assert by_repo["deepfreeze-000003"]["action"] == "skipped"
+
+    def test_failure_recorded_not_raised(self):
+        """A helper exception for one repo is recorded as 'failed', not propagated."""
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+
+        repo = Repository(name="deepfreeze-000001", bucket="bucket1", is_mounted=True)
+
+        with patch(
+            "deepfreeze_core.actions.update_date_ranges.get_all_repos"
+        ) as mock_repos:
+            mock_repos.return_value = [repo]
+
+            with patch(
+                "deepfreeze_core.actions.update_date_ranges.update_repository_date_range"
+            ) as mock_update:
+                mock_update.side_effect = RuntimeError("boom")
+
+                action = UpdateDateRanges(client=mock_client, porcelain=True)
+                action.do_action()  # must not raise
+
+        assert action._results[0]["action"] == "failed"
+        assert "boom" in action._results[0]["error"]
+
+    def test_dry_run_does_not_persist(self):
+        """Dry run reports mounted repos as would_scan and never calls the helper."""
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = True
+
+        repo = Repository(name="deepfreeze-000001", bucket="bucket1", is_mounted=True)
+
+        with patch(
+            "deepfreeze_core.actions.update_date_ranges.get_all_repos"
+        ) as mock_repos:
+            mock_repos.return_value = [repo]
+
+            with patch(
+                "deepfreeze_core.actions.update_date_ranges.update_repository_date_range"
+            ) as mock_update:
+                action = UpdateDateRanges(client=mock_client, porcelain=True)
+                action.do_dry_run()
+
+                mock_update.assert_not_called()
+
+        assert action._results[0]["action"] == "would_scan"
+
+
 class TestActionInterfaceConsistency:
     """Tests to verify all actions have consistent interface"""
 
     @pytest.mark.parametrize(
         "action_class",
-        [Setup, Status, Rotate, Thaw, Refreeze, Cleanup, RepairMetadata],
+        [Setup, Status, Rotate, Thaw, Refreeze, Cleanup, RepairMetadata, UpdateDateRanges],
     )
     def test_action_has_do_action_method(self, action_class):
         """Test all action classes have do_action method"""
@@ -641,7 +751,7 @@ class TestActionInterfaceConsistency:
 
     @pytest.mark.parametrize(
         "action_class",
-        [Setup, Status, Rotate, Thaw, Refreeze, Cleanup, RepairMetadata],
+        [Setup, Status, Rotate, Thaw, Refreeze, Cleanup, RepairMetadata, UpdateDateRanges],
     )
     def test_action_has_do_dry_run_method(self, action_class):
         """Test all action classes have do_dry_run method"""

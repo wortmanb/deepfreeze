@@ -44,6 +44,7 @@ from deepfreeze_core import (
     Setup,
     Status,
     Thaw,
+    UpdateDateRanges,
     # ES Client
     create_es_client,
     create_es_client_from_config,
@@ -92,4 +93,5 @@ __all__ = [
     "Refreeze",
     "Cleanup",
     "RepairMetadata",
+    "UpdateDateRanges",
 ]

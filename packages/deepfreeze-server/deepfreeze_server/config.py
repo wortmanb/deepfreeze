@@ -18,7 +18,7 @@ class ScheduledJobConfig(BaseModel):
     """A single scheduled job definition from config."""
 
     name: str
-    action: str  # rotate, thaw_check, cleanup, repair, refreeze
+    action: str  # rotate, thaw_check, cleanup, repair, refreeze, update_date_ranges
     params: dict[str, Any] = Field(default_factory=dict)
     cron: str | None = None  # cron expression (e.g., "0 2 1 * *")
     interval_seconds: int | None = None  # alternative: run every N seconds
