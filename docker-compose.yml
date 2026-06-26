@@ -44,10 +44,13 @@ services:
 #      - ./tls:/etc/deepfreeze/tls:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-# Storage credentials may instead be supplied as environment variables. Enable
-# the `environment:` key plus the lines you need (a bare name passes the value
-# through from your shell; NAME=value sets it explicitly).
-#    environment:
+    # Storage credentials may instead be supplied as environment variables. The
+    # `environment:` key below is already active (seeded with the no-op default
+    # DEEPFREEZE_PORT), so just delete the leading '#' from the lines you need —
+    # they append correctly without re-enabling the key. A bare name passes the
+    # value through from your shell; NAME=value sets it explicitly.
+    environment:
+      - DEEPFREEZE_PORT=8000
 # AWS:
 #      - AWS_ACCESS_KEY_ID
 #      - AWS_SECRET_ACCESS_KEY
@@ -60,5 +63,3 @@ services:
 #      - GOOGLE_APPLICATION_CREDENTIALS=/etc/deepfreeze/gcp-key.json
 #      - GOOGLE_CLOUD_PROJECT=my-gcp-project
 #      - GOOGLE_CLOUD_LOCATION=US
-# Override the bind port if needed (default 8000):
-#      - DEEPFREEZE_PORT=8000
