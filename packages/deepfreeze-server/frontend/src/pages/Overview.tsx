@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, type MouseEvent } from 'react';
 import { trimDate } from '../api/util';
 import {
   EuiFlexGroup,
@@ -17,13 +17,18 @@ import {
   EuiFlyoutBody,
   EuiBasicTable,
   EuiBadge,
+  EuiButtonIcon,
+  EuiConfirmModal,
+  EuiGlobalToastList,
   EuiDescriptionList,
   EuiProgress,
   type EuiBasicTableColumn,
 } from '@elastic/eui';
 import { useStatus } from '../hooks/useStatus';
-import { api, type RestoreProgress } from '../api/client';
+import { api, type RestoreProgress, type CommandResult } from '../api/client';
 import RefreshControl from '../components/RefreshControl';
+import Actions from '../components/Actions';
+import ColumnsDescriptionList from '../components/ColumnsDescriptionList';
 
 type Repo = Record<string, unknown>;
 type ThawReq = Record<string, unknown>;
@@ -123,6 +128,13 @@ interface FlyoutConfig {
   kind: 'repo' | 'thaw' | 'bucket' | 'ilm';
 }
 
+interface Toast {
+  id: string;
+  title: string;
+  color: 'success' | 'danger';
+  text?: string;
+}
+
 // -- Thaw detail helpers (same as ThawRequests page) --
 
 function formatElapsed(createdAt: string): string {
@@ -150,9 +162,13 @@ function ThawDetailContent({ item }: { item: ThawReq }) {
     return () => clearInterval(timer);
   }, [createdAt]);
 
+  const statusStr = String(item.status || 'unknown');
   const listItems = [
     { title: 'Request ID', description: String(item.request_id || item.id || '--') },
-    { title: 'Status', description: String(item.status || '--') },
+    {
+      title: 'Status',
+      description: <EuiBadge color={thawStatusColor(statusStr)}>{statusStr}</EuiBadge>,
+    },
     { title: 'Created At', description: createdAt ? `${trimDate(createdAt)}  (${elapsed} ago)` : '--' },
     { title: 'Date Range', description: `${trimDate(item.start_date) || '?'} \u2192 ${trimDate(item.end_date) || '?'}` },
   ];
@@ -169,6 +185,40 @@ export default function Overview() {
   const [detailThaw, setDetailThaw] = useState<ThawReq | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<RestoreProgress[] | null>(null);
   const [progressLoading, setProgressLoading] = useState(false);
+
+  // Refreeze action state (ported from the former Thaw Requests page)
+  const [refreezeTarget, setRefreezeTarget] = useState<ThawReq | null>(null);
+  const [refreezing, setRefreezing] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const addToast = useCallback((title: string, color: 'success' | 'danger', text?: string) => {
+    const id = String(Date.now());
+    setToasts((prev) => [...prev, { id, title, color, text }]);
+  }, []);
+
+  const removeToast = useCallback((removedToast: { id: string }) => {
+    setToasts((prev) => prev.filter((x) => x.id !== removedToast.id));
+  }, []);
+
+  const handleRefreeze = async () => {
+    if (!refreezeTarget) return;
+    const reqId = String(refreezeTarget.request_id || refreezeTarget.id || '');
+    setRefreezing(true);
+    try {
+      const result: CommandResult = await api.refreeze({ request_id: reqId });
+      if (result.success) {
+        addToast('Refreeze completed', 'success', result.summary || `Request ${reqId.substring(0, 8)} refrozen.`);
+        refresh(true);
+      } else {
+        addToast('Refreeze failed', 'danger', result.summary || 'Check errors for details.');
+      }
+    } catch (err) {
+      addToast('Refreeze error', 'danger', err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setRefreezing(false);
+      setRefreezeTarget(null);
+    }
+  };
 
   const openThawDetail = useCallback((item: ThawReq) => {
     setDetailThaw(item);
@@ -258,6 +308,29 @@ export default function Overview() {
     return {};
   };
 
+  // Thaw list-flyout columns, with a Refreeze action for completed requests
+  // (matches the clickable Actions column the old Thaw Requests table had).
+  const thawColumnsWithActions: EuiBasicTableColumn<Record<string, unknown>>[] = [
+    ...(thawColumns as EuiBasicTableColumn<Record<string, unknown>>[]),
+    {
+      name: 'Actions',
+      width: '80px',
+      render: (item: Record<string, unknown>) =>
+        item.status === 'completed' ? (
+          <EuiButtonIcon
+            iconType="snowflake"
+            color="danger"
+            aria-label="Refreeze this thaw request"
+            title="Refreeze"
+            onClick={(e: MouseEvent) => {
+              e.stopPropagation();
+              setRefreezeTarget(item);
+            }}
+          />
+        ) : null,
+    },
+  ];
+
   return (
     <>
       <EuiFlexGroup justifyContent="spaceBetween" alignItems="center">
@@ -331,7 +404,7 @@ export default function Overview() {
           <EuiPanel
             hasBorder
             style={cardStyle}
-            onClick={() => setFlyout({ title: 'Thaw Requests', items: status.thaw_requests, columns: thawColumns, kind: 'thaw' })}
+            onClick={() => setFlyout({ title: 'Thaw Requests', items: status.thaw_requests, columns: thawColumnsWithActions, kind: 'thaw' })}
           >
             <EuiStat title={status.thaw_requests.length} description="Thaw Requests" titleColor="accent" />
           </EuiPanel>
@@ -373,6 +446,10 @@ export default function Overview() {
         </>
       )}
 
+      {/* Actions (consolidated from the former standalone Actions page) */}
+      <EuiSpacer size="xl" />
+      <Actions />
+
       {/* List flyout (first level) */}
       {flyout && !detailRepo && !detailThaw && (
         <EuiFlyout onClose={() => setFlyout(null)} size="l" ownFocus>
@@ -401,19 +478,42 @@ export default function Overview() {
             </EuiTitle>
           </EuiFlyoutHeader>
           <EuiFlyoutBody>
-            <EuiDescriptionList
-              type="column"
-              compressed
-              listItems={Object.entries(detailRepo)
-                .filter(([, v]) => v !== null && v !== undefined)
-                .map(([key, value]) => ({
-                  title: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-                  description:
-                    typeof value === 'object'
-                      ? JSON.stringify(value, null, 2)
-                      : String(value),
-                }))}
-            />
+            {/* Same formatted cells as the Repositories list */}
+            <ColumnsDescriptionList columns={repoColumns} item={detailRepo} />
+
+            {/* Remaining fields not surfaced by a list column */}
+            {(() => {
+              const shownFields = new Set(
+                repoColumns
+                  .filter((c) => 'field' in c)
+                  .map((c) => (c as { field: string }).field),
+              );
+              // 'start'/'end' are rendered together as the Date Range column.
+              shownFields.add('start');
+              shownFields.add('end');
+              const extra = Object.entries(detailRepo).filter(
+                ([key, v]) => v !== null && v !== undefined && !shownFields.has(key),
+              );
+              if (extra.length === 0) return null;
+              return (
+                <>
+                  <EuiSpacer size="l" />
+                  <EuiTitle size="xs"><h3>Additional Details</h3></EuiTitle>
+                  <EuiSpacer size="s" />
+                  <EuiDescriptionList
+                    type="column"
+                    compressed
+                    listItems={extra.map(([key, value]) => ({
+                      title: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                      description:
+                        typeof value === 'object'
+                          ? JSON.stringify(value, null, 2)
+                          : String(value),
+                    }))}
+                  />
+                </>
+              );
+            })()}
           </EuiFlyoutBody>
         </EuiFlyout>
       )}
@@ -431,6 +531,19 @@ export default function Overview() {
           </EuiFlyoutHeader>
           <EuiFlyoutBody>
             <ThawDetailContent item={detailThaw} />
+
+            {detailThaw.status === 'completed' && (
+              <>
+                <EuiSpacer size="m" />
+                <EuiButton
+                  iconType="snowflake"
+                  color="danger"
+                  onClick={() => setRefreezeTarget(detailThaw)}
+                >
+                  Refreeze
+                </EuiButton>
+              </>
+            )}
 
             {Array.isArray(detailThaw.repositories) && detailThaw.repositories.length > 0 && (
               <>
@@ -482,6 +595,33 @@ export default function Overview() {
           </EuiFlyoutBody>
         </EuiFlyout>
       )}
+
+      {/* Refreeze confirmation (ported from the former Thaw Requests page) */}
+      {refreezeTarget && (
+        <EuiConfirmModal
+          title="Refreeze thaw request?"
+          onCancel={() => setRefreezeTarget(null)}
+          onConfirm={handleRefreeze}
+          cancelButtonText="Cancel"
+          confirmButtonText={refreezing ? 'Refreezing...' : 'Refreeze'}
+          buttonColor="danger"
+          isLoading={refreezing}
+        >
+          <EuiText size="s">
+            <p>
+              This will refreeze thaw request{' '}
+              <code>{String(refreezeTarget.request_id || refreezeTarget.id || '').substring(0, 8)}</code>,
+              unmount its snapshots, and mark the request as complete.
+            </p>
+          </EuiText>
+        </EuiConfirmModal>
+      )}
+
+      <EuiGlobalToastList
+        toasts={toasts}
+        dismissToast={removeToast as (toast: { id: string }) => void}
+        toastLifeTimeMs={8000}
+      />
     </>
   );
 }

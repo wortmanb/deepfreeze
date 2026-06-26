@@ -25,12 +25,9 @@ import {
   EuiFlexItem,
   EuiText,
 } from '@elastic/eui';
-import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { api, login, logout, checkSession, onAuthError, getAuthToken } from './api/client';
 import Overview from './pages/Overview';
-import Repositories from './pages/Repositories';
-import ThawRequests from './pages/ThawRequests';
-import Actions from './pages/Actions';
 import Activity from './pages/Activity';
 import Scheduler from './pages/Scheduler';
 
@@ -257,27 +254,6 @@ function AppShell({ onToggleColorMode, username, onLogout }: {
           onClick: () => navigate('/'),
         },
         {
-          name: 'Repositories',
-          id: 'repositories',
-          icon: <EuiIcon type="database" />,
-          isSelected: location.pathname === '/repositories',
-          onClick: () => navigate('/repositories'),
-        },
-        {
-          name: 'Thaw Requests',
-          id: 'thaw-requests',
-          icon: <EuiIcon type="temperature" />,
-          isSelected: location.pathname === '/thaw-requests',
-          onClick: () => navigate('/thaw-requests'),
-        },
-        {
-          name: 'Actions',
-          id: 'actions',
-          icon: <EuiIcon type="play" />,
-          isSelected: location.pathname === '/actions',
-          onClick: () => navigate('/actions'),
-        },
-        {
           name: 'Scheduler',
           id: 'scheduler',
           icon: <EuiIcon type="calendar" />,
@@ -364,11 +340,10 @@ function AppShell({ onToggleColorMode, username, onLogout }: {
         <EuiPageTemplate.Section>
           <Routes>
             <Route path="/" element={<Overview />} />
-            <Route path="/repositories" element={<Repositories />} />
-            <Route path="/thaw-requests" element={<ThawRequests />} />
-            <Route path="/actions" element={<Actions />} />
             <Route path="/scheduler" element={<Scheduler />} />
             <Route path="/activity" element={<Activity />} />
+            {/* Consolidated onto Overview; redirect old paths */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </EuiPageTemplate.Section>
       </EuiPageTemplate>
