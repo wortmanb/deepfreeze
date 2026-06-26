@@ -57,6 +57,71 @@ Browse to `http://<host>:8000`
 > auto-detects `frontend/dist/` relative to the source tree. Run `npm run dev`
 > in the `frontend/` directory for hot-reload during development.
 
+## Docker
+
+The server can run as a container instead of a systemd service. A multi-stage
+`Dockerfile` and a `docker-compose.yml` live at the **repository root**. The
+image builds the frontend, bundles it into the package, and installs
+`deepfreeze-core` (with the `azure` + `gcp` extras by default), `deepfreeze-cli`,
+and `deepfreeze-server`. It runs as a non-root user and exposes port `8000`.
+
+### Quick start (Compose)
+
+```bash
+# From the repo root:
+cp packages/deepfreeze-cli/config.yml.example ./config.yml
+$EDITOR ./config.yml            # set Elasticsearch connection, auth tokens, etc.
+docker compose up -d --build
+# Browse to http://localhost:8000
+```
+
+### Plain Docker
+
+```bash
+docker build -t deepfreeze-server .
+docker run -d --name deepfreeze-server -p 8000:8000 \
+  -v "$PWD/config.yml:/etc/deepfreeze/config.yml:ro" \
+  deepfreeze-server
+```
+
+The container runs `deepfreeze-server --config /etc/deepfreeze/config.yml
+--host 0.0.0.0 --port 8000`. Mount your config at that path.
+
+### Connecting to Elasticsearch
+
+Deepfreeze talks to an **external** Elasticsearch cluster — none is bundled.
+`elasticsearch.hosts` in your config must be reachable **from inside the
+container**:
+
+- ES on the Docker host → use `https://host.docker.internal:9200` (the Compose
+  file adds the `host-gateway` mapping so this works on Linux too), not
+  `localhost`.
+- ES elsewhere → use its real hostname/IP, or attach the container to the same
+  Docker network as your ES service.
+
+### Cloud storage credentials
+
+For self-managed clusters using ambient credentials, supply them either by
+mounting the credential files or via environment variables (see the commented
+examples in `docker-compose.yml`):
+
+| Provider | Mount | or Env |
+|----------|-------|--------|
+| AWS   | `-v ~/.aws:/home/deepfreeze/.aws:ro` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` |
+| GCP   | `-v ./sa.json:/home/deepfreeze/.gcp/creds.json:ro` | `GOOGLE_APPLICATION_CREDENTIALS=/home/deepfreeze/.gcp/creds.json` |
+| Azure | — | `AZURE_STORAGE_CONNECTION_STRING` |
+
+If `config.server.tls` is set, mount the cert/key into the container and point
+the config at the mounted paths.
+
+### Build options & updating
+
+- Slim the image to one provider: `docker compose build --build-arg
+  CORE_EXTRAS="[gcp]"` (or `"[azure]"`, or `""` for AWS-only).
+- Update to a new version: `git pull && docker compose up -d --build` — the
+  frontend and packages are rebuilt as part of the image, so no separate
+  rebuild step is needed (unlike the systemd install).
+
 ## Configuration
 
 The server reads the same `~/.deepfreeze/config.yml` used by the CLI. An optional `server` section controls server-specific settings:
