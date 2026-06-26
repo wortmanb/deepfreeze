@@ -27,18 +27,47 @@ services:
     volumes:
       # Your deepfreeze config (read-only). Required.
       - ./config.yml:/etc/deepfreeze/config.yml:ro
-      # Optional: mount cloud credentials for self-managed (ambient) auth.
+      #
+      # --- Cloud storage credentials (uncomment the provider you use) ---------
+      # Any host path that your config.yml references must be mounted into the
+      # container, and the config must point at the IN-CONTAINER path (left side
+      # of the mount is the host path, right side is the path inside the
+      # container). The container runs as uid 1000, so the mounted file/dir must
+      # be readable by that uid.
+      #
+      # AWS — mount your credentials/profile directory:
       # - ${HOME}/.aws:/home/deepfreeze/.aws:ro
-      # - ./gcp-sa.json:/home/deepfreeze/.gcp/creds.json:ro
+      #
+      # Azure — credentials are usually env-only (see below); nothing to mount.
+      #
+      # GCP — mount the service-account key, then set config.storage.gcp
+      #       credentials_file to the in-container path (or use the env var):
+      #   storage:
+      #     gcp:
+      #       credentials_file: /etc/deepfreeze/gcp-key.json
+      # - /host/path/to/deepfreeze-key.json:/etc/deepfreeze/gcp-key.json:ro
+      #
       # Optional: TLS material if config.server.tls is set.
       # - ./tls:/etc/deepfreeze/tls:ro
-    # Storage credentials may be supplied via env instead of mounted files.
-    # Uncomment and fill what you use (bare names pass through from your shell):
-    #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
-    #   AZURE_STORAGE_CONNECTION_STRING
-    #   GOOGLE_APPLICATION_CREDENTIALS=/home/deepfreeze/.gcp/creds.json
-    # Override the bind port if needed (default 8000): DEEPFREEZE_PORT
-    environment: []
+    #
+    # Storage credentials may also be supplied via environment variables instead
+    # of (or in addition to) mounted files. Bare names pass through from your
+    # shell; NAME=value sets an explicit value. Uncomment the `environment:` key
+    # and the provider lines you use.
+    # environment:
+    #   # --- AWS --- (or mount ~/.aws above; or rely on an instance role/IMDS)
+    #   - AWS_ACCESS_KEY_ID
+    #   - AWS_SECRET_ACCESS_KEY
+    #   - AWS_DEFAULT_REGION
+    #   # --- Azure --- (one of these)
+    #   - AZURE_STORAGE_CONNECTION_STRING
+    #   - AZURE_STORAGE_ACCOUNT
+    #   - AZURE_STORAGE_KEY
+    #   # --- GCP --- (alternative to config.storage.gcp.credentials_file; still
+    #   #             requires mounting the key file under volumes above)
+    #   - GOOGLE_APPLICATION_CREDENTIALS=/etc/deepfreeze/gcp-key.json
+    #   # Override the bind port if needed (default 8000):
+    #   - DEEPFREEZE_PORT=8000
     # On Linux, lets the container reach an Elasticsearch running on the host
     # via http://host.docker.internal:9200 (built in on Docker Desktop).
     extra_hosts:
