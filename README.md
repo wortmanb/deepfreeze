@@ -24,6 +24,37 @@ See Elastic Search Labs blog post at https://www.elastic.co/search-labs/blog/s3-
 | **Azure** | Blob Storage | Archive tier |
 | **GCP** | Cloud Storage | Archive storage class |
 
+## Storage prerequisites
+
+`deepfreeze setup` **creates the storage bucket/container for you** — it does not
+adopt an existing one. If the target bucket/container already exists, setup
+**fails** and asks you to pick a new name or remove it (so it never overwrites
+data). What must already exist *before* you run setup differs by provider:
+
+| Provider | `setup` creates | Must already exist | Credentials need |
+|----------|-----------------|--------------------|------------------|
+| **AWS S3** | the bucket | nothing beyond valid credentials | `s3:CreateBucket` (+ a region) |
+| **GCP GCS** | the bucket | the **project** | `storage.buckets.create`; project id set via `storage.gcp.project` or `GOOGLE_CLOUD_PROJECT` |
+| **Azure Blob** | the **container** | the **storage account** | connection string / account key for that existing account |
+
+Notes:
+
+- **Azure is the one to watch.** deepfreeze creates only the *container*; it
+  **cannot create the storage account** (that's an Azure control-plane/ARM
+  operation), so the account must exist first. Point deepfreeze at it via
+  `storage.azure.connection_string` (or `account_name` + `account_key`).
+- **AWS and GCP bucket names are globally unique** — choose a name nobody else
+  has taken.
+- No provider lets you **reuse a pre-existing bucket/container** through setup; a
+  name already in use is treated as an error.
+
+> **CLI note:** when running `deepfreeze setup` directly (not via the server),
+> the CLI reads storage credentials from the **environment**, not from
+> `config.yml`'s `storage` block. For GCP set `GOOGLE_APPLICATION_CREDENTIALS`
+> (and `GOOGLE_CLOUD_PROJECT`); for AWS use the standard `AWS_*` vars or a
+> mounted profile; for Azure set `AZURE_STORAGE_CONNECTION_STRING`. The server
+> bridges these from `config.yml` automatically; the CLI does not.
+
 ## Features
 
 - **Setup**: Configure ILM policies, index templates, and storage buckets for deepfreeze
