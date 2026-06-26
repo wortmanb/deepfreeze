@@ -78,6 +78,7 @@ class Setup:
         style: str = "oneup",
         ilm_policy_name: str = None,
         index_template_name: str = None,
+        create_data_stream_template: bool = False,
         porcelain: bool = False,
         audit: AuditLogger = None,
         **kwargs,  # Accept extra kwargs for compatibility with curator CLI
@@ -108,6 +109,7 @@ class Setup:
         # Keep direct references for convenience
         self.ilm_policy_name = ilm_policy_name
         self.index_template_name = index_template_name
+        self.create_data_stream_template = create_data_stream_template
         self.base_path = self.settings.base_path_prefix
 
         self.s3 = s3_client_factory(self.settings.provider)
@@ -242,7 +244,15 @@ class Setup:
             except Exception:
                 pass  # Template not found
 
-        if not template_exists:
+        if not template_exists and self.create_data_stream_template:
+            # Caller opted to have setup create a minimal data-stream template
+            # (do_action handles it); don't treat its absence as a blocker.
+            self.loggit.info(
+                "Index template %s missing; will create a minimal data-stream "
+                "template (--create-data-stream-template)",
+                self.index_template_name,
+            )
+        elif not template_exists:
             errors.append(
                 {
                     "issue": f"Index template [cyan]{self.index_template_name}[/cyan] does not exist",
@@ -812,6 +822,63 @@ class Setup:
                         )
                     )
                 raise
+
+            # Optionally create a minimal data-stream index template when it is
+            # missing and the caller opted in. The data template is normally the
+            # user's own (defining their mappings); this opt-in keeps
+            # reset -> setup self-contained for dev/test. The later ILM-link step
+            # then attaches the policy to it.
+            if self.create_data_stream_template and self.index_template_name and (
+                not self.client.indices.exists_index_template(name=self.index_template_name)
+            ):
+                try:
+                    self.client.indices.put_index_template(
+                        name=self.index_template_name,
+                        body={
+                            "index_patterns": [self.index_template_name],
+                            "data_stream": {},
+                            "template": {
+                                "mappings": {"properties": {"@timestamp": {"type": "date"}}}
+                            },
+                        },
+                    )
+                    self.loggit.info(
+                        "Created minimal data-stream template %s", self.index_template_name
+                    )
+                    if tracker:
+                        tracker.add_result(
+                            {
+                                "type": "index_template",
+                                "name": self.index_template_name,
+                                "action": "created",
+                            }
+                        )
+                    if self.porcelain:
+                        print(f"INDEX_TEMPLATE\t{self.index_template_name}\tcreated")
+                    else:
+                        self.console.print(
+                            Panel(
+                                f"[bold green]Created data-stream template [cyan]{self.index_template_name}[/cyan][/bold green]\n\n"
+                                f"index_patterns: [[cyan]{self.index_template_name}[/cyan]], data_stream enabled, @timestamp:date.",
+                                title="[bold green]Index Template Created[/bold green]",
+                                border_style="green",
+                                expand=False,
+                            )
+                        )
+                except Exception as e:  # noqa: BLE001 - non-fatal; ILM-link step warns
+                    self.loggit.warning("Failed to create data-stream template: %s", e)
+                    if self.porcelain:
+                        print(f"WARNING\tindex_template\t{self.index_template_name}\t{str(e)}")
+                    else:
+                        self.console.print(
+                            Panel(
+                                f"[bold yellow]Could not create data-stream template [cyan]{self.index_template_name}[/cyan][/bold yellow]\n\n"
+                                f"Error: {escape(str(e))}",
+                                title="[bold yellow]Index Template Warning[/bold yellow]",
+                                border_style="yellow",
+                                expand=False,
+                            )
+                        )
 
             # Variables to track ILM and template results
             ilm_result = None

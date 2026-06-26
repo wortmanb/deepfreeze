@@ -838,6 +838,62 @@ class TestSetupRobustness:
         assert any("not verifiable" in f for f in failures)
 
 
+    def test_create_data_stream_template_flag_skips_missing_template_precondition(self):
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = False
+        mock_client.snapshot.get_repository.return_value = {}
+        mock_client.indices.get_index_template.side_effect = Exception("not found")
+        mock_client.indices.get_template.side_effect = Exception("not found")
+        mock_client.info.return_value = {"version": {"number": "8.10.0"}}
+        with patch("deepfreeze_core.actions.setup.s3_client_factory") as mock_factory:
+            mock_s3 = MagicMock()
+            mock_s3.bucket_exists.return_value = False
+            mock_factory.return_value = mock_s3
+            with_flag = Setup(
+                client=mock_client, repo_name_prefix="r", bucket_name_prefix="b",
+                ilm_policy_name="p", index_template_name="t",
+                create_data_stream_template=True, porcelain=True,
+            )
+            with_flag._check_preconditions()  # missing template tolerated -> no raise
+            without_flag = Setup(
+                client=mock_client, repo_name_prefix="r", bucket_name_prefix="b",
+                ilm_policy_name="p", index_template_name="t",
+                create_data_stream_template=False, porcelain=True,
+            )
+            with pytest.raises(PreconditionError):
+                without_flag._check_preconditions()  # missing template blocks
+
+    def test_create_data_stream_template_creates_when_missing(self):
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = False
+        mock_client.snapshot.get_repository.return_value = {}
+        mock_client.indices.exists_index_template.return_value = False
+        mock_client.info.return_value = {"version": {"number": "8.10.0"}}
+        with patch("deepfreeze_core.actions.setup.s3_client_factory") as mock_factory, patch(
+            "deepfreeze_core.actions.setup.ensure_settings_index"
+        ), patch("deepfreeze_core.actions.setup.save_settings"), patch(
+            "deepfreeze_core.actions.setup.create_repo"
+        ), patch(
+            "deepfreeze_core.actions.setup.create_or_update_ilm_policy", return_value={"action": "created"}
+        ), patch(
+            "deepfreeze_core.actions.setup.update_index_template_ilm_policy", return_value={"action": "updated"}
+        ):
+            mock_s3 = MagicMock()
+            mock_s3.bucket_exists.return_value = False
+            mock_factory.return_value = mock_s3
+            setup = Setup(
+                client=mock_client, repo_name_prefix="r", bucket_name_prefix="b",
+                ilm_policy_name="p", index_template_name="t",
+                create_data_stream_template=True, porcelain=True,
+            )
+            with patch.object(Setup, "_verify_end_state", return_value=[]):
+                setup.do_action()
+        mock_client.indices.put_index_template.assert_called_once()
+        _, kwargs = mock_client.indices.put_index_template.call_args
+        assert kwargs.get("name") == "t"
+        assert kwargs["body"]["data_stream"] == {}
+
+
 class TestActionInterfaceConsistency:
     """Tests to verify all actions have consistent interface"""
 

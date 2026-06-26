@@ -329,6 +329,16 @@ def get_audit_from_context(ctx):
     "The template will be updated to use the specified ILM policy.",
 )
 @click.option(
+    "--create-data-stream-template",
+    "create_data_stream_template",
+    is_flag=True,
+    default=False,
+    help="If the index template named by --index_template_name does not exist, "
+    "create a minimal data-stream template for it (index_patterns=[<name>], "
+    "data_stream enabled, @timestamp:date) instead of failing. Convenience for "
+    "dev/test bootstrap; normally the data template is your own.",
+)
+@click.option(
     "-p",
     "--porcelain",
     is_flag=True,
@@ -350,6 +360,7 @@ def setup(
     style,
     ilm_policy_name,
     index_template_name,
+    create_data_stream_template,
     porcelain,
 ):
     """
@@ -434,6 +445,7 @@ def setup(
         style=style,
         ilm_policy_name=ilm_policy_name,
         index_template_name=index_template_name,
+        create_data_stream_template=create_data_stream_template,
         porcelain=porcelain,
     )
 
