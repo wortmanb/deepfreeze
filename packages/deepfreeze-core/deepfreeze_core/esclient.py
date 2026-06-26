@@ -6,6 +6,7 @@ with support for all authentication methods. It does NOT depend on es_client.bui
 """
 
 import logging
+import os
 
 import yaml
 from elasticsearch8 import Elasticsearch
@@ -279,6 +280,63 @@ def get_storage_credentials(config_path: str, provider: str) -> dict:
         )
 
     return provider_config
+
+
+# Map config `storage.<provider>` keys -> the standard cloud-SDK environment
+# variables. Core actions construct provider clients via s3_client_factory(provider)
+# with no explicit credentials; the underlying SDKs (boto3, google-auth, the
+# Azure SDK) discover credentials from these env vars. Bridging the config here
+# is what lets both the CLI and the server honor config.yml's storage block
+# without the operator exporting anything by hand.
+STORAGE_ENV_MAP = {
+    "aws": {
+        "region": "AWS_DEFAULT_REGION",
+        "profile": "AWS_PROFILE",
+        "access_key_id": "AWS_ACCESS_KEY_ID",
+        "secret_access_key": "AWS_SECRET_ACCESS_KEY",
+    },
+    "azure": {
+        "connection_string": "AZURE_STORAGE_CONNECTION_STRING",
+        "account_name": "AZURE_STORAGE_ACCOUNT",
+        "account_key": "AZURE_STORAGE_KEY",
+    },
+    "gcp": {
+        "project": "GOOGLE_CLOUD_PROJECT",
+        "credentials_file": "GOOGLE_APPLICATION_CREDENTIALS",
+        "location": "GOOGLE_CLOUD_LOCATION",
+    },
+}
+
+
+def apply_storage_credentials(config: dict) -> list:
+    """Populate cloud-SDK env vars from the ``storage`` section of a loaded config.
+
+    Reads ``config['storage'][<provider>]`` and exports the mapped environment
+    variables (see ``STORAGE_ENV_MAP``) so provider clients pick the credentials
+    up. Existing environment variables are never overwritten, so an explicitly
+    exported value always wins over the config file.
+
+    Both the CLI (at startup) and the server (at lifespan startup) call this so
+    that storage credentials in config.yml are honored consistently.
+
+    :param config: A config dict as returned by ``load_config_from_yaml``.
+    :returns: The list of environment variable names that were set from config.
+    """
+    loggit = logging.getLogger("deepfreeze.esclient")
+    storage = (config or {}).get("storage", {})
+    if not storage:
+        return []
+    applied = []
+    for provider, mappings in STORAGE_ENV_MAP.items():
+        provider_cfg = storage.get(provider, {}) or {}
+        for config_key, env_var in mappings.items():
+            value = provider_cfg.get(config_key)
+            if value and env_var not in os.environ:
+                os.environ[env_var] = str(value)
+                applied.append(env_var)
+    if applied:
+        loggit.debug("Applied storage credentials to env: %s", ", ".join(applied))
+    return applied
 
 
 def create_es_client_from_config(config_path: str) -> Elasticsearch:

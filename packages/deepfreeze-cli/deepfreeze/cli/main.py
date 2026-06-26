@@ -15,6 +15,7 @@ from deepfreeze_core import (
     AuditLogger,
     DeepfreezeException,
     PreconditionError,
+    apply_storage_credentials,
     create_es_client,
 )
 
@@ -136,6 +137,12 @@ def cli(ctx, config_path, dry_run, local, server_url):
 
         # Configure logging first
         configure_logging(config)
+
+        # Honor config.yml's storage block: populate the standard cloud-SDK env
+        # vars so local actions (setup/rotate/thaw/...) pick up credentials from
+        # config without the operator exporting AWS_*/GOOGLE_*/AZURE_* by hand.
+        # (The server does the same at startup; this keeps the CLI consistent.)
+        apply_storage_credentials(config)
 
         # Now log the config path (after logging is configured)
         if using_default_config:

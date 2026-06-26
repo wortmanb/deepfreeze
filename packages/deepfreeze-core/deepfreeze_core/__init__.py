@@ -40,6 +40,7 @@ from deepfreeze_core.constants import (
 # Export ES client utilities
 from deepfreeze_core.esclient import (
     ESClientWrapper,
+    apply_storage_credentials,
     create_es_client,
     create_es_client_from_config,
     get_storage_credentials,
@@ -146,6 +147,7 @@ __all__ = [
     "s3_client_factory",
     # ES Client
     "ESClientWrapper",
+    "apply_storage_credentials",
     "create_es_client",
     "create_es_client_from_config",
     "get_storage_credentials",
