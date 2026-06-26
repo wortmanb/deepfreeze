@@ -164,6 +164,87 @@ pip install packages/deepfreeze-core[azure,gcp]
    ```bash
    deepfreeze-server --config ~/.deepfreeze/config.yml
    ```
+   This runs it in the foreground. For a persistent deployment, see
+   [Deploying the Server](#deploying-the-server) below.
+
+## Deploying the Server
+
+The `deepfreeze-server` daemon (REST API + Web UI + scheduler) can be deployed
+two ways. Both serve the API, the bundled React UI, and the in-process job
+scheduler from a single process on port `8000` — pick whichever fits your
+environment. Full details are in
+[packages/deepfreeze-server/README.md](packages/deepfreeze-server/README.md).
+
+> **Single process by design.** The scheduler runs inside the web process, so
+> run exactly **one** server instance (one uvicorn worker). Running multiple
+> replicas/workers without external coordination would fire scheduled jobs more
+> than once.
+
+### Option A — systemd service
+
+Best when running directly on a host (the package is already pip-installed).
+
+```bash
+# The interactive installer offers to install and start the unit for you:
+./install.sh
+```
+
+To set it up manually, install the packages (see [Installation](#installation),
+which builds and bundles the Web UI), then install the provided unit file
+[packages/deepfreeze-server/deepfreeze-server.service](packages/deepfreeze-server/deepfreeze-server.service)
+(edit the `User`, paths, and `--config` to match your host):
+
+```bash
+sudo cp packages/deepfreeze-server/deepfreeze-server.service \
+        /etc/systemd/system/deepfreeze-server.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now deepfreeze-server
+
+# Manage it:
+systemctl status deepfreeze-server
+journalctl -u deepfreeze-server -f        # follow logs
+sudo systemctl restart deepfreeze-server  # e.g. after an update
+```
+
+Because the Web UI is bundled into the package at install time, updating a
+systemd deployment means rebuilding the frontend and reinstalling. The
+[`update-testbox.sh`](update-testbox.sh) helper automates pull → rebuild →
+redeploy → restart.
+
+### Option B — Docker container
+
+Best for a self-contained, reproducible deployment. A multi-stage `Dockerfile`
+and `docker-compose.yml` live at the repository root; the image builds the
+frontend, bundles it, and installs all three packages (with the `azure` + `gcp`
+extras by default).
+
+```bash
+# From the repo root:
+cp packages/deepfreeze-cli/config.yml.example ./config.yml
+$EDITOR ./config.yml          # set Elasticsearch connection, auth tokens, etc.
+docker compose up -d --build
+# Browse to http://localhost:8000
+```
+
+Or with plain Docker:
+
+```bash
+docker build -t deepfreeze-server .
+docker run -d --name deepfreeze-server -p 8000:8000 \
+  -v "$PWD/config.yml:/etc/deepfreeze/config.yml:ro" \
+  deepfreeze-server
+```
+
+Key points (see the server README's **Docker** section for the rest):
+
+- **Elasticsearch is external** — none is bundled. `elasticsearch.hosts` must be
+  reachable *from inside the container*; for ES on the Docker host use
+  `https://host.docker.internal:9200`, not `localhost`.
+- **Cloud credentials** are supplied via mounted files or environment variables
+  (see the commented examples in `docker-compose.yml`).
+- **Updating** is just `git pull && docker compose up -d --build` — the frontend
+  and packages are rebuilt as part of the image, so there is no separate rebuild
+  step.
 
 ## Development
 
@@ -194,7 +275,11 @@ deepfreeze/
 │   ├── deepfreeze-core/       # Core domain logic library
 │   ├── deepfreeze-cli/        # Standalone CLI (local + remote)
 │   └── deepfreeze-server/     # Persistent daemon (REST + SSE + Web UI)
-├── install.sh                 # Interactive installer
+│       └── deepfreeze-server.service   # systemd unit
+├── install.sh                 # Interactive installer (packages + systemd)
+├── update-testbox.sh          # Pull, rebuild frontend, redeploy, restart
+├── Dockerfile                 # Multi-stage server image (frontend + packages)
+├── docker-compose.yml         # Container deployment
 ├── tests/
 └── .github/workflows/
 ```
