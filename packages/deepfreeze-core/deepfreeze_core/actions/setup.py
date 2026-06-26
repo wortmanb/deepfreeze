@@ -11,7 +11,7 @@ from rich.panel import Panel
 
 from deepfreeze_core.audit import AuditLogger
 from deepfreeze_core.constants import STATUS_INDEX
-from deepfreeze_core.exceptions import PreconditionError
+from deepfreeze_core.exceptions import ActionError, PreconditionError
 from deepfreeze_core.helpers import Settings
 from deepfreeze_core.s3client import s3_client_factory
 from deepfreeze_core.utilities import (
@@ -124,6 +124,11 @@ class Setup:
         else:
             self.new_bucket_name = f"{self.settings.bucket_name_prefix}"
             self.base_path = f"{self.base_path}-{self.suffix}"
+
+        # Tracks whether *this* run created the bucket, so a later failure
+        # (e.g. ES cannot verify the repo) can roll it back instead of
+        # orphaning an empty bucket.
+        self._bucket_created_this_run = False
 
         self.loggit.debug("Deepfreeze Setup initialized")
 
@@ -378,6 +383,136 @@ class Setup:
             summary = f"Found {len(errors)} precondition error{'s' if len(errors) > 1 else ''}: {'; '.join(issue_texts)}"
             raise PreconditionError(summary, issues=issue_texts)
 
+    @staticmethod
+    def _looks_like_storage_auth_error(exc: Exception) -> bool:
+        """Heuristic: does this exception indicate ES couldn't authenticate to
+        (or verify access to) the storage repository?
+
+        These come back from ``snapshot.create_repository`` (verify=true) when
+        the Elasticsearch keystore's storage credentials are missing/invalid/
+        stale, e.g. ``repository_verification_exception`` /
+        ``Invalid JWT Signature`` / ``AccessDenied`` / 401/403.
+        """
+        text = str(exc).lower()
+        markers = (
+            "repository_verification_exception",
+            "is not accessible on master node",
+            "invalid jwt",
+            "invalid_grant",
+            "access_token",
+            "accessdenied",
+            "access denied",
+            "403 forbidden",
+            "401 unauthorized",
+            "s_a_s",  # azure SAS
+            "signaturedoesnotmatch",
+            "invalidaccesskeyid",
+        )
+        return any(m in text for m in markers)
+
+    def _rollback_bucket(self) -> str:
+        """Delete the bucket/container this run created (best effort).
+
+        Called when repository creation/verification fails so we don't leave an
+        orphaned empty bucket behind. Returns a human-readable status note (or
+        empty string if there was nothing to roll back).
+        """
+        if not self._bucket_created_this_run:
+            return ""
+        try:
+            self.s3.delete_bucket(self.new_bucket_name, force=True)
+            self._bucket_created_this_run = False
+            self.loggit.info(
+                "Rolled back bucket %s after repository failure", self.new_bucket_name
+            )
+            return f"deleted the bucket [cyan]{self.new_bucket_name}[/cyan] this run created"
+        except Exception as e:  # noqa: BLE001 - rollback is best-effort
+            self.loggit.warning(
+                "Failed to roll back bucket %s: %s", self.new_bucket_name, e
+            )
+            return (
+                f"could NOT auto-delete bucket [cyan]{self.new_bucket_name}[/cyan] "
+                f"({escape(str(e))}); remove it manually"
+            )
+
+    def _verify_end_state(self) -> list:
+        """Validate that setup actually produced a usable end state.
+
+        Returns a list of failure strings (empty == fully valid). Run before
+        declaring success so we never report success on a half-built state
+        (e.g. settings written but no repository doc, or a registered repo ES
+        can't actually reach).
+        """
+        from deepfreeze_core.utilities import get_repository, get_settings
+
+        failures = []
+
+        # 1. ES snapshot repo registered AND reachable (real ES->storage check).
+        try:
+            repos = self.client.snapshot.get_repository(name=self.new_repo_name)
+            if self.new_repo_name not in repos:
+                failures.append(f"snapshot repository '{self.new_repo_name}' is not registered")
+            else:
+                self.client.snapshot.verify_repository(name=self.new_repo_name)
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"snapshot repository '{self.new_repo_name}' not verifiable: {e}")
+
+        # 2. status repository doc exists and matches.
+        try:
+            repo_doc = get_repository(self.client, self.new_repo_name)
+            if not repo_doc or repo_doc.name != self.new_repo_name:
+                failures.append(f"status index has no repository doc for '{self.new_repo_name}'")
+            elif repo_doc.bucket != self.new_bucket_name or repo_doc.base_path != self.base_path:
+                failures.append(
+                    f"status repository doc mismatch (bucket={repo_doc.bucket}, base_path={repo_doc.base_path})"
+                )
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"could not read status repository doc: {e}")
+
+        # 3. settings doc present.
+        try:
+            if not get_settings(self.client):
+                failures.append("settings document missing from status index")
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"could not read settings document: {e}")
+
+        # 4. storage bucket reachable.
+        try:
+            if not self.s3.bucket_exists(self.new_bucket_name):
+                failures.append(f"storage bucket '{self.new_bucket_name}' not found")
+        except Exception as e:  # noqa: BLE001
+            failures.append(f"could not check storage bucket: {e}")
+
+        # 5. ILM policy present (when requested).
+        if self.ilm_policy_name:
+            try:
+                self.client.ilm.get_lifecycle(name=self.ilm_policy_name)
+            except Exception:  # noqa: BLE001
+                failures.append(f"ILM policy '{self.ilm_policy_name}' not found")
+
+        # 6. index template present + linked to the ILM policy (when requested).
+        if self.index_template_name and self.ilm_policy_name:
+            try:
+                tmpl = self.client.indices.get_index_template(name=self.index_template_name)
+                items = tmpl.get("index_templates", [])
+                linked = items and (
+                    items[0].get("index_template", {})
+                    .get("template", {})
+                    .get("settings", {})
+                    .get("index", {})
+                    .get("lifecycle", {})
+                    .get("name")
+                    == self.ilm_policy_name
+                )
+                if not linked:
+                    failures.append(
+                        f"index template '{self.index_template_name}' is not linked to ILM policy '{self.ilm_policy_name}'"
+                    )
+            except Exception as e:  # noqa: BLE001
+                failures.append(f"could not verify index template: {e}")
+
+        return failures
+
     def do_dry_run(self) -> None:
         """
         Perform a dry-run of the setup process.
@@ -551,6 +686,7 @@ class Setup:
             )
             try:
                 self.s3.create_bucket(self.new_bucket_name)
+                self._bucket_created_this_run = True
                 self.loggit.info(
                     "Successfully created S3 bucket %s", self.new_bucket_name
                 )
@@ -617,32 +753,60 @@ class Setup:
                         }
                     )
             except Exception as e:
+                # ES registers + verifies the repo using ITS OWN keystore
+                # credentials (gcs.client.* / s3.client.* / azure.client.*),
+                # which are separate from the CLI's config.yml creds. A
+                # verification failure here almost always means those keystore
+                # creds are missing/invalid/out of sync with the operator key.
+                is_auth = self._looks_like_storage_auth_error(e)
+                # Roll back the bucket we just created so we don't orphan it.
+                rollback_note = self._rollback_bucket()
+
                 if self.porcelain:
-                    print(f"ERROR\trepository\t{self.new_repo_name}\t{str(e)}")
+                    kind = "es_storage_auth" if is_auth else "repository"
+                    print(f"ERROR\t{kind}\t{self.new_repo_name}\t{str(e)}")
+                    if rollback_note:
+                        print(f"ROLLBACK\tbucket\t{self.new_bucket_name}\t{rollback_note}")
                 else:
-                    # Get provider-specific error info from the storage client
-                    plugin_name = self.s3.ES_PLUGIN_NAME
-                    plugin_display = self.s3.ES_PLUGIN_DISPLAY_NAME
-                    doc_url = self.s3.ES_PLUGIN_DOC_URL
                     storage_type = self.s3.STORAGE_TYPE
                     keystore_instructions = self.s3.ES_KEYSTORE_INSTRUCTIONS
+                    doc_url = self.s3.ES_PLUGIN_DOC_URL
+                    plugin_name = self.s3.ES_PLUGIN_NAME
+                    plugin_display = self.s3.ES_PLUGIN_DISPLAY_NAME
 
-                    solutions = (
-                        f"[bold]Possible Solutions:[/bold]\n"
-                        f"  1. Install the {plugin_display} repository plugin on all Elasticsearch nodes:\n"
-                        f"     [yellow]bin/elasticsearch-plugin install {plugin_name}[/yellow]\n\n"
-                        f"  2. {keystore_instructions}\n\n"
-                        f"  3. Verify {storage_type} [cyan]{self.new_bucket_name}[/cyan] is accessible\n\n"
-                        f"[bold]Documentation:[/bold]\n"
-                        f"  {doc_url}"
-                    )
+                    if is_auth:
+                        title = "Elasticsearch Cannot Access the Repository"
+                        solutions = (
+                            f"Elasticsearch could not access {storage_type} "
+                            f"[cyan]{self.new_bucket_name}[/cyan] for repository "
+                            f"[cyan]{self.new_repo_name}[/cyan].\n\n"
+                            "This is an [bold]Elasticsearch keystore credential[/bold] problem, "
+                            "[bold]not[/bold] your CLI/config.yml credentials (those just created "
+                            "the bucket successfully). ES uses its own stored credentials to "
+                            "read/write the snapshot repository, and they are missing, invalid, "
+                            "or out of sync with the current key.\n\n"
+                            f"[bold]Fix:[/bold] {keystore_instructions}\n\n"
+                            f"[bold]Docs:[/bold] {doc_url}"
+                        )
+                    else:
+                        title = "Repository Creation Error"
+                        solutions = (
+                            f"[bold]Possible Solutions:[/bold]\n"
+                            f"  1. Install the {plugin_display} repository plugin on all Elasticsearch nodes:\n"
+                            f"     [yellow]bin/elasticsearch-plugin install {plugin_name}[/yellow]\n\n"
+                            f"  2. {keystore_instructions}\n\n"
+                            f"  3. Verify {storage_type} [cyan]{self.new_bucket_name}[/cyan] is accessible\n\n"
+                            f"[bold]Documentation:[/bold]\n"
+                            f"  {doc_url}"
+                        )
 
+                    rollback_line = f"\n\n[bold]Rollback:[/bold] {rollback_note}" if rollback_note else ""
                     self.console.print(
                         Panel(
                             f"[bold]Failed to create repository [cyan]{self.new_repo_name}[/cyan][/bold]\n\n"
                             f"Error: {escape(str(e))}\n\n"
-                            f"{solutions}",
-                            title="[bold red]Repository Creation Error[/bold red]",
+                            f"{solutions}{rollback_line}",
+                            title=f"[bold red]{title}[/bold red]",
                             border_style="red",
                             expand=False,
                         )
@@ -776,6 +940,33 @@ class Setup:
                         )
                     self.loggit.warning("Failed to update index template: %s", e)
 
+            # Validate the end state before declaring success, so we never
+            # report success on a half-built result.
+            validation_failures = self._verify_end_state()
+            if validation_failures:
+                if tracker:
+                    for vf in validation_failures:
+                        tracker.add_error({"code": "POST_SETUP_VALIDATION", "message": vf})
+                if self.porcelain:
+                    for vf in validation_failures:
+                        print(f"VALIDATION_FAILED\t{vf}")
+                else:
+                    bullets = "\n".join(f"  - {escape(vf)}" for vf in validation_failures)
+                    self.console.print(
+                        Panel(
+                            "[bold]Setup ran, but the end state is incomplete — NOT declaring success.[/bold]\n\n"
+                            f"{bullets}\n\n"
+                            "Resolve the above, then run [yellow]deepfreeze cleanup[/yellow] and re-run setup "
+                            "before relying on this repository.",
+                            title="[bold red]Post-Setup Validation Failed[/bold red]",
+                            border_style="red",
+                            expand=False,
+                        )
+                    )
+                raise ActionError(
+                    "post-setup validation failed: " + "; ".join(validation_failures)
+                )
+
             # Success!
             if tracker:
                 tracker.set_summary(
@@ -878,6 +1069,12 @@ class Setup:
                         "message": "Precondition check failed",
                     }
                 )
+            raise
+        except ActionError as e:
+            # Already-displayed errors (bucket/repo failure with rollback,
+            # post-setup validation). Re-raise without the generic panel.
+            if tracker:
+                tracker.add_error({"code": "ACTION_ERROR", "message": str(e)})
             raise
         except Exception as e:
             # Catch any unexpected errors

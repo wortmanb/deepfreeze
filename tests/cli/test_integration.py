@@ -211,7 +211,10 @@ class TestSetupStatusWorkflow:
                                     porcelain=True,
                                 )
 
-                                setup.do_action()
+                                with patch.object(
+                                    Setup, "_verify_end_state", return_value=[]
+                                ):
+                                    setup.do_action()
 
         # Verify bucket was created (bucket name prefix used, not full suffix)
         # The setup creates the bucket with just the prefix
@@ -266,7 +269,10 @@ class TestSetupRotateWorkflow:
                                     porcelain=True,
                                 )
 
-                                setup.do_action()
+                                with patch.object(
+                                    Setup, "_verify_end_state", return_value=[]
+                                ):
+                                    setup.do_action()
 
         # Verify bucket was created
         assert mock_s3.bucket_exists("rotate-bucket")

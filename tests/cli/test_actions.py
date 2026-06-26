@@ -149,8 +149,14 @@ class TestSetupAction:
                                     porcelain=True,
                                 )
 
-                                # Should not raise
-                                setup.do_action()
+                                # Should not raise. End-state validation is
+                                # exercised separately in TestSetupRobustness;
+                                # stub it here so this happy-path test stays
+                                # focused on bucket/repo creation.
+                                with patch.object(
+                                    Setup, "_verify_end_state", return_value=[]
+                                ):
+                                    setup.do_action()
 
                                 # S3 bucket should be created
                                 mock_s3.create_bucket.assert_called_once()
@@ -735,6 +741,101 @@ class TestUpdateDateRangesAction:
                 mock_update.assert_not_called()
 
         assert action._results[0]["action"] == "would_scan"
+
+
+class TestSetupRobustness:
+    """v2 setup robustness: error classification, bucket rollback, end-state validation."""
+
+    def _make_setup(self, mock_client):
+        with patch("deepfreeze_core.actions.setup.s3_client_factory") as mock_factory:
+            mock_s3 = MagicMock()
+            mock_factory.return_value = mock_s3
+            setup = Setup(
+                client=mock_client,
+                repo_name_prefix="r",
+                bucket_name_prefix="b",
+                base_path_prefix="snapshots",
+                ilm_policy_name="p",
+                index_template_name="t",
+                provider="aws",
+                porcelain=True,
+            )
+        return setup, mock_s3
+
+    @pytest.mark.parametrize(
+        "msg,expected",
+        [
+            ("repository_verification_exception: [r] is not accessible on master node", True),
+            ("invalid_grant: Invalid JWT Signature", True),
+            ("AccessDenied: Access Denied", True),
+            ("403 Forbidden", True),
+            ("SignatureDoesNotMatch", True),
+            ("Connection reset by peer", False),
+            ("some generic failure", False),
+        ],
+    )
+    def test_looks_like_storage_auth_error(self, msg, expected):
+        assert Setup._looks_like_storage_auth_error(Exception(msg)) is expected
+
+    def test_rollback_deletes_bucket_created_this_run(self):
+        setup, mock_s3 = self._make_setup(MagicMock())
+        setup._bucket_created_this_run = True
+        note = setup._rollback_bucket()
+        mock_s3.delete_bucket.assert_called_once_with(setup.new_bucket_name, force=True)
+        assert setup._bucket_created_this_run is False
+        assert setup.new_bucket_name in note
+
+    def test_rollback_noop_when_bucket_not_created(self):
+        setup, mock_s3 = self._make_setup(MagicMock())
+        setup._bucket_created_this_run = False
+        assert setup._rollback_bucket() == ""
+        mock_s3.delete_bucket.assert_not_called()
+
+    def _ok_mocks(self, setup, mock_client, mock_s3):
+        mock_client.snapshot.get_repository.return_value = {setup.new_repo_name: {}}
+        mock_client.indices.get_index_template.return_value = {
+            "index_templates": [
+                {"index_template": {"template": {"settings": {"index": {"lifecycle": {"name": "p"}}}}}}
+            ]
+        }
+        mock_s3.bucket_exists.return_value = True
+
+    def test_verify_end_state_passes_when_complete(self):
+        mock_client = MagicMock()
+        setup, mock_s3 = self._make_setup(mock_client)
+        self._ok_mocks(setup, mock_client, mock_s3)
+        repo_obj = Repository(
+            name=setup.new_repo_name, bucket=setup.new_bucket_name, base_path=setup.base_path
+        )
+        with patch("deepfreeze_core.utilities.get_repository", return_value=repo_obj), patch(
+            "deepfreeze_core.utilities.get_settings", return_value=MagicMock()
+        ):
+            assert setup._verify_end_state() == []
+
+    def test_verify_end_state_flags_missing_repo_doc(self):
+        mock_client = MagicMock()
+        setup, mock_s3 = self._make_setup(mock_client)
+        self._ok_mocks(setup, mock_client, mock_s3)
+        # Repo registered + verifiable, but status doc absent (name mismatch).
+        with patch(
+            "deepfreeze_core.utilities.get_repository", return_value=Repository(name="other")
+        ), patch("deepfreeze_core.utilities.get_settings", return_value=MagicMock()):
+            failures = setup._verify_end_state()
+        assert any("repository doc" in f for f in failures)
+
+    def test_verify_end_state_flags_unverifiable_repo(self):
+        mock_client = MagicMock()
+        setup, mock_s3 = self._make_setup(mock_client)
+        self._ok_mocks(setup, mock_client, mock_s3)
+        mock_client.snapshot.verify_repository.side_effect = Exception("not accessible on master node")
+        repo_obj = Repository(
+            name=setup.new_repo_name, bucket=setup.new_bucket_name, base_path=setup.base_path
+        )
+        with patch("deepfreeze_core.utilities.get_repository", return_value=repo_obj), patch(
+            "deepfreeze_core.utilities.get_settings", return_value=MagicMock()
+        ):
+            failures = setup._verify_end_state()
+        assert any("not verifiable" in f for f in failures)
 
 
 class TestActionInterfaceConsistency:
