@@ -35,8 +35,9 @@ services:
 # The container runs as uid 1000, so mounted files must be readable by that uid.
 # AWS — mount your credentials/profile directory:
 #      - ${HOME}/.aws:/home/deepfreeze/.aws:ro
-# GCP — mount the service-account key, then set in config.yml:
-#         storage.gcp.credentials_file: /etc/deepfreeze/gcp-key.json
+# GCP — project and location stay in config.yml's storage.gcp block (they are
+#       config, not credentials). Mount the service-account key and set, in that
+#       same block, credentials_file: /etc/deepfreeze/gcp-key.json
 #      - /host/path/to/key.json:/etc/deepfreeze/gcp-key.json:ro
 # Azure — no mount needed; supply credentials via environment below.
 # TLS — if config.server.tls is set, mount the cert/key:
@@ -55,7 +56,9 @@ services:
 #      - AZURE_STORAGE_CONNECTION_STRING
 #      - AZURE_STORAGE_ACCOUNT
 #      - AZURE_STORAGE_KEY
-# GCP (alternative to config credentials_file; still mount the key above):
+# GCP (env alternatives to the config storage.gcp block; still mount the key):
 #      - GOOGLE_APPLICATION_CREDENTIALS=/etc/deepfreeze/gcp-key.json
+#      - GOOGLE_CLOUD_PROJECT=my-gcp-project
+#      - GOOGLE_CLOUD_LOCATION=US
 # Override the bind port if needed (default 8000):
 #      - DEEPFREEZE_PORT=8000
