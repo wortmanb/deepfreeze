@@ -87,7 +87,7 @@ class DeepfreezeClient:
         self,
         year: int | None = None,
         month: int | None = None,
-        keep: int = 1,
+        keep: int = 6,
         dry_run: bool = False,
     ) -> dict[str, Any]:
         return self._post_action("/api/actions/rotate", {

@@ -48,7 +48,7 @@ class Rotate:
     and optionally unmounts old repositories.
 
     :param client: A client connection object
-    :param keep: Number of repositories to keep mounted (default: 1)
+    :param keep: Number of repositories to keep mounted (default: 6)
     :param year: Year override for date-style rotation
     :param month: Month override for date-style rotation
 
@@ -65,7 +65,7 @@ class Rotate:
     def __init__(
         self,
         client: Elasticsearch,
-        keep: int = 1,
+        keep: int = 6,
         year: int = None,
         month: int = None,
         porcelain: bool = False,

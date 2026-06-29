@@ -27,7 +27,7 @@ class CommandResult(BaseModel):
 class RotateRequest(BaseModel):
     year: int | None = None
     month: int | None = None
-    keep: int = 1
+    keep: int = 6
     dry_run: bool = False
 
 
