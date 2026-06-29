@@ -19,6 +19,7 @@ import {
   EuiButton,
   EuiForm,
   EuiFormRow,
+  EuiCheckbox,
   EuiPanel,
   EuiCallOut,
   EuiFlexGroup,
@@ -58,6 +59,7 @@ function LoginPage({ onToggleColorMode, onLogin }: {
   const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(true);
 
   const canSubmit = authMode === 'password'
     ? username && password
@@ -71,7 +73,7 @@ function LoginPage({ onToggleColorMode, onLogin }: {
       const credentials = authMode === 'password'
         ? { username, password }
         : { api_key: apiKey };
-      const result = await login(credentials);
+      const result = await login(credentials, remember);
       onLogin(result.username);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -177,6 +179,13 @@ function LoginPage({ onToggleColorMode, onLogin }: {
                 />
               </EuiFormRow>
             )}
+            <EuiSpacer size="s" />
+            <EuiCheckbox
+              id="deepfreeze-remember-me"
+              label="Remember me on this device"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+            />
             <EuiSpacer size="m" />
             <EuiButton
               type="submit"

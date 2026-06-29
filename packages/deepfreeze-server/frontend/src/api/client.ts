@@ -17,16 +17,53 @@ function detectApiBase(): string {
 const API_BASE = detectApiBase();
 
 // -- Auth token management --
+//
+// Default (no "remember me"): the token lives in sessionStorage and is cleared
+// when the browser/tab closes. With "remember me": the token is persisted in a
+// cookie that outlives the browser session (expiry matches the server session
+// TTL), so the user isn't re-prompted for credentials on every browser restart.
+// The token is always sent to the server via the Authorization header; the
+// cookie is just client-side persistence (not read by the server).
 
-let _authToken: string | null = sessionStorage.getItem('deepfreeze-auth-token');
+const TOKEN_KEY = 'deepfreeze-auth-token';
+const DEFAULT_REMEMBER_MAX_AGE = 30 * 24 * 60 * 60; // 30 days
+
+function setCookie(name: string, value: string, maxAgeSeconds: number) {
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie =
+    `${name}=${encodeURIComponent(value)}; Max-Age=${maxAgeSeconds}; Path=/; SameSite=Strict${secure}`;
+}
+
+function getCookie(name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = document.cookie.match(new RegExp('(?:^|; )' + escaped + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function deleteCookie(name: string) {
+  document.cookie = `${name}=; Max-Age=0; Path=/; SameSite=Strict`;
+}
+
+// On load, prefer a remembered (cookie) token, then a session token.
+let _authToken: string | null = getCookie(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY);
 let _onAuthError: (() => void) | null = null;
 
-export function setAuthToken(token: string | null) {
+export function setAuthToken(
+  token: string | null,
+  options: { remember?: boolean; maxAgeSeconds?: number } = {},
+) {
   _authToken = token;
-  if (token) {
-    sessionStorage.setItem('deepfreeze-auth-token', token);
+  if (!token) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    deleteCookie(TOKEN_KEY);
+    return;
+  }
+  if (options.remember) {
+    setCookie(TOKEN_KEY, token, options.maxAgeSeconds ?? DEFAULT_REMEMBER_MAX_AGE);
+    sessionStorage.removeItem(TOKEN_KEY);
   } else {
-    sessionStorage.removeItem('deepfreeze-auth-token');
+    sessionStorage.setItem(TOKEN_KEY, token);
+    deleteCookie(TOKEN_KEY);
   }
 }
 
@@ -73,18 +110,20 @@ export interface UserInfo {
 
 export async function login(
   credentials: { username: string; password: string } | { api_key: string },
+  remember = false,
 ): Promise<LoginResponse> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(credentials),
+    body: JSON.stringify({ ...credentials, remember }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(error.detail || 'Login failed');
   }
   const data: LoginResponse = await res.json();
-  setAuthToken(data.token);
+  // Persist per "remember me"; align cookie lifetime with the server session TTL.
+  setAuthToken(data.token, { remember, maxAgeSeconds: data.expires_in });
   return data;
 }
 

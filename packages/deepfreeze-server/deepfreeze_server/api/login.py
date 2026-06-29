@@ -22,12 +22,14 @@ router = APIRouter()
 _sessions: dict[str, dict] = {}
 
 SESSION_TTL = 8 * 60 * 60  # 8 hours
+REMEMBER_TTL = 30 * 24 * 60 * 60  # 30 days — used when "remember me" is set
 
 
 class LoginRequest(BaseModel):
     username: str | None = None
     password: str | None = None
     api_key: str | None = None  # ES API key (id:key or encoded)
+    remember: bool = False  # extend the session TTL ("remember me")
 
 
 class LoginResponse(BaseModel):
@@ -119,18 +121,22 @@ async def login(body: LoginRequest, request: Request):
             content={"detail": "Invalid Elasticsearch credentials"},
         )
 
-    # Create session
+    # Create session. "Remember me" uses a longer TTL so the user isn't
+    # re-prompted for credentials as often.
+    ttl = REMEMBER_TTL if body.remember else SESSION_TTL
     token = f"dfs_{secrets.token_urlsafe(32)}"
     now = time.time()
     _sessions[token] = {
         "username": es_username,
         "authenticated_at": now,
-        "expires_at": now + SESSION_TTL,
+        "expires_at": now + ttl,
     }
     _purge_expired()
 
-    logger.info("User '%s' logged in successfully", es_username)
-    return LoginResponse(token=token, username=es_username)
+    logger.info(
+        "User '%s' logged in successfully (remember=%s)", es_username, body.remember
+    )
+    return LoginResponse(token=token, username=es_username, expires_in=ttl)
 
 
 @router.get("/auth/me", response_model=UserInfo)
