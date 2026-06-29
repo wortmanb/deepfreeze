@@ -30,9 +30,15 @@ services:
       - "8000:8000"
     volumes:
       - ./config.yml:/etc/deepfreeze/config.yml:ro
-# Cloud storage credentials: mount any host path your config.yml references, and
-# point the config at the IN-CONTAINER path (left = host, right = container).
-# The container runs as uid 1000, so mounted files must be readable by that uid.
+# Cloud storage credentials — IMPORTANT, common pitfall:
+# A credential FILE referenced by config.yml (e.g. storage.gcp.credentials_file,
+# or any cert/key path) must be (1) MOUNTED into the container here AND (2) have
+# config.yml point at the IN-CONTAINER path, NOT the host path. A host path that
+# is not mounted does not exist inside the container — you will get
+# "[Errno 2] No such file or directory: '/home/you/key.json'" at startup.
+# In each mount, left = host path, right = in-container path; set config.yml to
+# the right-hand path. The container runs as uid 1000, so mounted files must be
+# readable by that uid (e.g. chmod 644 the key).
 # AWS — mount your credentials/profile directory:
 #      - ${HOME}/.aws:/home/deepfreeze/.aws:ro
 # GCP — project and location stay in config.yml's storage.gcp block (they are

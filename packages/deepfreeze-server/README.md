@@ -105,6 +105,15 @@ For self-managed clusters using ambient credentials, supply them either by
 mounting the credential files or via environment variables (see the commented
 examples in `docker-compose.yml`):
 
+> **Credential files must be mounted, and `config.yml` must reference the
+> in-container path.** Any file path in `config.yml` (e.g.
+> `storage.gcp.credentials_file`, TLS cert/key) is resolved *inside* the
+> container. A host path that isn't mounted does not exist there, and the server
+> fails at startup with `[Errno 2] No such file or directory: '<host path>'`. So:
+> (1) add a volume mapping `host/path:/etc/deepfreeze/<name>:ro`, and (2) set the
+> config value to the right-hand (in-container) path. Mounted files must be
+> readable by uid 1000 (`chmod 644`).
+
 | Provider | Mount | or Env |
 |----------|-------|--------|
 | AWS   | `-v ~/.aws:/home/deepfreeze/.aws:ro` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` |
