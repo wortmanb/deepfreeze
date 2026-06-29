@@ -457,6 +457,16 @@ class Setup:
 
         failures = []
 
+        # Make freshly-written status docs searchable before reading them.
+        # Elasticsearch search is near-real-time: without this refresh, the
+        # repository/settings docs that create_repo/save_settings just wrote may
+        # not yet be visible to the searches below, producing false negatives
+        # (e.g. "repository doc mismatch (bucket=None)").
+        try:
+            self.client.indices.refresh(index=STATUS_INDEX)
+        except Exception:  # noqa: BLE001 - refresh is best-effort
+            pass
+
         # 1. ES snapshot repo registered AND reachable (real ES->storage check).
         try:
             repos = self.client.snapshot.get_repository(name=self.new_repo_name)

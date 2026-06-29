@@ -811,6 +811,9 @@ class TestSetupRobustness:
             "deepfreeze_core.utilities.get_settings", return_value=MagicMock()
         ):
             assert setup._verify_end_state() == []
+        # Must refresh the status index first so freshly-written docs are visible
+        # (regression: NRT search race produced false "bucket=None" mismatches).
+        mock_client.indices.refresh.assert_called_once()
 
     def test_verify_end_state_flags_missing_repo_doc(self):
         mock_client = MagicMock()
