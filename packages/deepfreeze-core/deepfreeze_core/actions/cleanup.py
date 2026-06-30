@@ -25,6 +25,8 @@ from deepfreeze_core.exceptions import (
 )
 from deepfreeze_core.s3client import s3_client_factory
 from deepfreeze_core.utilities import (
+    delete_orphaned_fm_clone_indices,
+    find_orphaned_fm_clone_indices,
     get_matching_repos,
     get_settings,
     is_policy_safe_to_delete,
@@ -354,9 +356,22 @@ class Cleanup:
             expired_repos = self._find_expired_repos()
             old_requests = self._find_old_thaw_requests()
             orphaned_policies = self._find_orphaned_policies()
+            # Orphaned fm-clone clones would be deleted before the policy sweep;
+            # surface them separately since (in dry-run) they still pin policies.
+            fm_clone_orphans = find_orphaned_fm_clone_indices(
+                self.client, self.settings.repo_name_prefix
+            )
 
             # Add audit results for items that would be cleaned
             if tracker:
+                for name in fm_clone_orphans:
+                    tracker.add_result(
+                        {
+                            "type": "fm_clone_index",
+                            "name": name,
+                            "action": "would_delete",
+                        }
+                    )
                 for repo in expired_repos:
                     tracker.add_result(
                         {
@@ -390,6 +405,7 @@ class Cleanup:
                         "expired_repos": len(expired_repos),
                         "old_requests": len(old_requests),
                         "orphan_policies": len(orphaned_policies),
+                        "fm_clone_indices": len(fm_clone_orphans),
                     }
                 )
 
@@ -408,9 +424,12 @@ class Cleanup:
                         f"DRY_RUN\torphan_policy\t{policy_info['policy_name']}\t"
                         f"{policy_info['referenced_repo']}"
                     )
+                for name in fm_clone_orphans:
+                    print(f"DRY_RUN\tfm_clone_index\t{name}")
                 print(
                     f"SUMMARY\t{len(expired_repos)} repos\t{len(old_requests)} requests\t"
-                    f"{len(orphaned_policies)} policies"
+                    f"{len(orphaned_policies)} policies\t"
+                    f"{len(fm_clone_orphans)} fm-clone indices"
                 )
             else:
                 # Expired repositories
@@ -476,15 +495,30 @@ class Cleanup:
                     )
                     self.console.print()
 
+                # Orphaned fm-clone indices
+                if fm_clone_orphans:
+                    table = Table(title="Orphaned fm-clone Indices")
+                    table.add_column("Index Name", style="cyan")
+                    for name in fm_clone_orphans:
+                        table.add_row(name)
+                    self.console.print(table)
+                    self.console.print()
+
                 # Summary
-                total = len(expired_repos) + len(old_requests) + len(orphaned_policies)
+                total = (
+                    len(expired_repos)
+                    + len(old_requests)
+                    + len(orphaned_policies)
+                    + len(fm_clone_orphans)
+                )
                 if total > 0:
                     self.console.print(
                         Panel(
                             f"[bold]Would clean up:[/bold]\n"
                             f"  - {len(expired_repos)} expired repositories\n"
                             f"  - {len(old_requests)} old thaw requests\n"
-                            f"  - {len(orphaned_policies)} orphaned ILM policies",
+                            f"  - {len(orphaned_policies)} orphaned ILM policies\n"
+                            f"  - {len(fm_clone_orphans)} orphaned fm-clone indices",
                             title="[bold blue]Dry Run Summary[/bold blue]",
                             border_style="blue",
                             expand=False,
@@ -528,6 +562,18 @@ class Cleanup:
 
         try:
             self._load_settings()
+
+            # Delete orphaned fm-clone-* force-merge clones FIRST. They keep
+            # versioned ILM policies listed in in_use_by.indices, so the
+            # orphaned-policy sweep below cannot reclaim those policies until
+            # the clones are gone.
+            fm_clone_deleted = delete_orphaned_fm_clone_indices(
+                self.client, self.settings.repo_name_prefix
+            )
+            if fm_clone_deleted:
+                self.loggit.info(
+                    "Deleted %d orphaned fm-clone indices", len(fm_clone_deleted)
+                )
 
             # Find items to clean up
             expired_repos = self._find_expired_repos()
@@ -613,6 +659,16 @@ class Cleanup:
                                 "error": r.get("error"),
                             }
                         )
+
+                for name in fm_clone_deleted:
+                    tracker.add_result(
+                        {
+                            "type": "fm_clone_index",
+                            "name": name,
+                            "action": "deleted",
+                            "status": "success",
+                        }
+                    )
 
                 repo_success = sum(1 for r in repo_results if r["success"])
                 repo_failed = sum(1 for r in repo_results if not r["success"])

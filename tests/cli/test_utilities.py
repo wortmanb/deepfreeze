@@ -548,3 +548,101 @@ class TestAllUtilityFunctionsAccessible:
         assert callable(mount_snapshot_index)
         assert callable(get_all_indices_in_repo)
         assert callable(find_and_mount_indices_in_date_range)
+
+
+class TestFindOrphanedFmCloneIndices:
+    """Tests for find_orphaned_fm_clone_indices / delete_orphaned_fm_clone_indices."""
+
+    def _client_with(self, settings, data_streams=None):
+        client = MagicMock()
+        client.indices.get_settings.return_value = settings
+        client.indices.get_data_stream.return_value = {
+            "data_streams": data_streams or []
+        }
+        return client
+
+    def _idx(self, policy, hidden="true", complete="true", skip="false"):
+        s = {"index.lifecycle.name": policy}
+        if hidden is not None:
+            s["index.hidden"] = hidden
+        if complete is not None:
+            s["index.lifecycle.indexing_complete"] = complete
+        if skip is not None:
+            s["index.lifecycle.skip"] = skip
+        return {"settings": s}
+
+    def test_finds_completed_hidden_deepfreeze_clones(self):
+        from deepfreeze_core.utilities import find_orphaned_fm_clone_indices
+
+        client = self._client_with(
+            {
+                "fm-clone-a1-.ds-df-test-1": self._idx("deepfreeze-000002"),
+                "fm-clone-b2-.ds-df-test-2": self._idx(
+                    "deepfreeze-000003", complete="false", skip="true"
+                ),
+            }
+        )
+        result = find_orphaned_fm_clone_indices(client, "deepfreeze")
+        assert result == [
+            "fm-clone-a1-.ds-df-test-1",
+            "fm-clone-b2-.ds-df-test-2",
+        ]
+
+    def test_skips_live_backing_index(self):
+        from deepfreeze_core.utilities import find_orphaned_fm_clone_indices
+
+        client = self._client_with(
+            {"fm-clone-a1-.ds-df-test-1": self._idx("deepfreeze-000002")},
+            data_streams=[
+                {"name": "df-test", "indices": [
+                    {"index_name": "fm-clone-a1-.ds-df-test-1"}
+                ]}
+            ],
+        )
+        # It is still a current backing index -> must NOT be considered orphaned.
+        assert find_orphaned_fm_clone_indices(client, "deepfreeze") == []
+
+    def test_skips_in_flight_and_foreign_clones(self):
+        from deepfreeze_core.utilities import find_orphaned_fm_clone_indices
+
+        client = self._client_with(
+            {
+                # in-flight: not complete, not skipped
+                "fm-clone-c3-.ds-df-test-3": self._idx(
+                    "deepfreeze-000004", complete="false", skip="false"
+                ),
+                # not hidden
+                "fm-clone-d4-.ds-df-test-4": self._idx(
+                    "deepfreeze-000005", hidden="false"
+                ),
+                # foreign policy (not a deepfreeze policy)
+                "fm-clone-e5-.ds-other-1": self._idx("some-other-policy"),
+            }
+        )
+        assert find_orphaned_fm_clone_indices(client, "deepfreeze") == []
+
+    def test_delete_removes_each_orphan(self):
+        from deepfreeze_core.utilities import delete_orphaned_fm_clone_indices
+
+        client = self._client_with(
+            {
+                "fm-clone-a1-.ds-df-test-1": self._idx("deepfreeze-000002"),
+                "fm-clone-b2-.ds-df-test-2": self._idx("deepfreeze-000003"),
+            }
+        )
+        deleted = delete_orphaned_fm_clone_indices(client, "deepfreeze")
+        assert deleted == [
+            "fm-clone-a1-.ds-df-test-1",
+            "fm-clone-b2-.ds-df-test-2",
+        ]
+        assert client.indices.delete.call_count == 2
+
+    def test_delete_dry_run_does_not_delete(self):
+        from deepfreeze_core.utilities import delete_orphaned_fm_clone_indices
+
+        client = self._client_with(
+            {"fm-clone-a1-.ds-df-test-1": self._idx("deepfreeze-000002")}
+        )
+        names = delete_orphaned_fm_clone_indices(client, "deepfreeze", dry_run=True)
+        assert names == ["fm-clone-a1-.ds-df-test-1"]
+        client.indices.delete.assert_not_called()

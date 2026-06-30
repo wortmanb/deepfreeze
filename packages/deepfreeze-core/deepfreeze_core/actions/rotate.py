@@ -25,6 +25,7 @@ from deepfreeze_core.s3client import s3_client_factory
 from deepfreeze_core.utilities import (
     create_repo,
     create_versioned_ilm_policy,
+    delete_orphaned_fm_clone_indices,
     get_composable_templates,
     get_ilm_policy,
     get_index_templates,
@@ -451,6 +452,20 @@ class Rotate:
 
         if not self.settings.ilm_policy_name:
             return deleted_policies
+
+        # Remove orphaned fm-clone-* force-merge clones first. While they exist
+        # they keep their versioned policy listed in in_use_by.indices, so
+        # is_policy_safe_to_delete() below would never return True and the old
+        # policies would accumulate indefinitely.
+        if not dry_run:
+            fm_clone_deleted = delete_orphaned_fm_clone_indices(
+                self.client, self.settings.repo_name_prefix
+            )
+            if fm_clone_deleted:
+                self.loggit.info(
+                    "Deleted %d orphaned fm-clone indices before policy cleanup",
+                    len(fm_clone_deleted),
+                )
 
         try:
             all_policies = self.client.ilm.get_lifecycle()

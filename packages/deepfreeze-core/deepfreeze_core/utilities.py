@@ -2014,6 +2014,129 @@ def is_policy_safe_to_delete(client: Elasticsearch, policy_name: str) -> bool:
         return False
 
 
+def find_orphaned_fm_clone_indices(
+    client: Elasticsearch, repo_name_prefix: str
+) -> list:
+    """
+    Find orphaned ``fm-clone-*`` force-merge clone indices left behind by ILM.
+
+    When ILM runs the ``searchable_snapshot`` action it force-merges into a
+    temporary hidden clone named ``fm-clone-<random>-<original>``. That clone is
+    meant to be transient, but it can persist if the action is interrupted
+    (for example a deepfreeze rotate/refreeze removed the snapshot repository
+    while the action was in flight). While the clone exists, its
+    ``index.lifecycle.name`` keeps the (versioned) ILM policy listed in
+    ``in_use_by.indices``, so the policy can never be deleted -- which is why
+    early ``deepfreeze-00000N`` policies accumulate forever.
+
+    Only clones that are completed/abandoned are returned:
+
+    * name starts with ``fm-clone-``
+    * ``index.hidden`` is true
+    * ``index.lifecycle.indexing_complete`` or ``index.lifecycle.skip`` is true
+    * ``index.lifecycle.name`` references a deepfreeze policy (starts with
+      ``repo_name_prefix``)
+    * the index is NOT a current data-stream backing index
+
+    The data-stream and completion checks guarantee we never touch a live
+    backing index or an in-flight force-merge.
+
+    :param client: A client connection object
+    :type client: Elasticsearch
+    :param repo_name_prefix: The deepfreeze repo/policy name prefix to scope to
+    :type repo_name_prefix: str
+
+    :returns: Sorted list of orphaned fm-clone index names
+    :rtype: list
+    """
+    orphaned = []
+
+    if not repo_name_prefix:
+        return orphaned
+
+    try:
+        all_settings = client.indices.get_settings(
+            index="fm-clone-*",
+            expand_wildcards="all",
+            flat_settings=True,
+        )
+    except NotFoundError:
+        return orphaned
+    except Exception as e:  # noqa: BLE001
+        loggit.debug("Could not list fm-clone-* indices: %s", e)
+        return orphaned
+
+    if not all_settings:
+        return orphaned
+
+    # Collect current data-stream backing indices so we never delete live data.
+    backing = set()
+    try:
+        ds_resp = client.indices.get_data_stream(name="*")
+        for ds in ds_resp.get("data_streams", []):
+            for idx in ds.get("indices", []):
+                backing.add(idx["index_name"])
+    except Exception as e:  # noqa: BLE001
+        loggit.debug("Could not list data streams: %s", e)
+
+    def _is_true(value) -> bool:
+        return str(value).lower() == "true"
+
+    for name, info in all_settings.items():
+        s = info.get("settings", {})
+        policy = s.get("index.lifecycle.name")
+        if (
+            name.startswith("fm-clone-")
+            and name not in backing
+            and policy
+            and policy.startswith(repo_name_prefix)
+            and _is_true(s.get("index.hidden"))
+            and (
+                _is_true(s.get("index.lifecycle.indexing_complete"))
+                or _is_true(s.get("index.lifecycle.skip"))
+            )
+        ):
+            orphaned.append(name)
+
+    loggit.debug("Found %d orphaned fm-clone indices", len(orphaned))
+    return sorted(orphaned)
+
+
+def delete_orphaned_fm_clone_indices(
+    client: Elasticsearch, repo_name_prefix: str, dry_run: bool = False
+) -> list:
+    """
+    Delete orphaned ``fm-clone-*`` force-merge clone indices.
+
+    See :func:`find_orphaned_fm_clone_indices` for the (conservative) criteria
+    used to decide which indices are orphaned. Removing them releases the ILM
+    policies they pin so those policies can subsequently be deleted.
+
+    :param client: A client connection object
+    :type client: Elasticsearch
+    :param repo_name_prefix: The deepfreeze repo/policy name prefix to scope to
+    :type repo_name_prefix: str
+    :param dry_run: If True, only report what would be deleted
+    :type dry_run: bool
+
+    :returns: List of index names that were (or would be) deleted
+    :rtype: list
+    """
+    names = find_orphaned_fm_clone_indices(client, repo_name_prefix)
+    if dry_run:
+        return names
+
+    deleted = []
+    for name in names:
+        try:
+            loggit.info("Deleting orphaned fm-clone index %s", name)
+            client.indices.delete(index=name, expand_wildcards="all")
+            deleted.append(name)
+        except Exception as e:  # noqa: BLE001
+            loggit.warning("Failed to delete orphaned fm-clone index %s: %s", name, e)
+    return deleted
+
+
 def find_snapshots_for_index(
     client: Elasticsearch, repo_name: str, index_name: str
 ) -> list:
