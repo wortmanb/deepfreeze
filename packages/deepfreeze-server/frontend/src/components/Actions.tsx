@@ -27,6 +27,10 @@ interface ActionCard {
   description: string;
   icon: string;
   color: 'primary' | 'success' | 'warning' | 'danger' | 'accent';
+  // cta: card button label (trailing ellipsis signals it opens an options dialog).
+  // confirm: the committed action, used for the dialog's confirm button and title.
+  cta: string;
+  confirm: string;
 }
 
 const actionCards: ActionCard[] = [
@@ -36,6 +40,8 @@ const actionCards: ActionCard[] = [
     description: 'Thaw data for a given date range by requesting it from storage and mounting it when ready.',
     icon: 'temperature',
     color: 'warning',
+    cta: 'Thaw Data…',
+    confirm: 'Thaw data',
   },
   {
     id: 'refreeze',
@@ -43,6 +49,8 @@ const actionCards: ActionCard[] = [
     description: 'Refreeze thawed indices, unmount snapshots, and mark thaw requests as complete.',
     icon: 'snowflake',
     color: 'danger',
+    cta: 'Refreeze Indices…',
+    confirm: 'Refreeze indices',
   },
   {
     id: 'rotate',
@@ -50,6 +58,8 @@ const actionCards: ActionCard[] = [
     description: 'Rotate snapshot repositories, set a new ILM policy for the new repo, and send the oldest to long-term storage.',
     icon: 'sortRight',
     color: 'primary',
+    cta: 'Rotate Now…',
+    confirm: 'Rotate now',
   },
   {
     id: 'cleanup',
@@ -57,6 +67,8 @@ const actionCards: ActionCard[] = [
     description: 'Clean up refrozen indices and temporary thaw artifacts that are past retention.',
     icon: 'broom',
     color: 'accent',
+    cta: 'Clean Up…',
+    confirm: 'Clean up',
   },
   {
     id: 'repair',
@@ -64,6 +76,8 @@ const actionCards: ActionCard[] = [
     description: 'Detect and repair inconsistencies in snapshot registrations and state tracking.',
     icon: 'wrench',
     color: 'success',
+    cta: 'Detect & Repair…',
+    confirm: 'Detect & repair',
   },
 ];
 
@@ -270,7 +284,7 @@ export default function Actions() {
                   onClick={() => setActiveAction(ac.id)}
                   fullWidth
                 >
-                  Run {ac.title}
+                  {ac.cta}
                 </EuiButton>
               </div>
             </EuiPanel>
@@ -281,11 +295,11 @@ export default function Actions() {
       {/* Confirm Modal */}
       {activeAction && card && (
         <EuiConfirmModal
-          title={`Run ${card.title}?`}
+          title={`${card.confirm}?`}
           onCancel={() => { setActiveAction(null); setSelectedRequestId('__all__'); }}
           onConfirm={handleExecute}
           cancelButtonText="Cancel"
-          confirmButtonText={executing ? 'Executing...' : `Run ${card.title}`}
+          confirmButtonText={executing ? 'Working…' : card.confirm}
           buttonColor={card.color}
           isLoading={executing}
         >
