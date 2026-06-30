@@ -486,6 +486,64 @@ class TestRefreezeAction:
 
                     mock_list.assert_called_once()
 
+    def test_refreeze_detaches_only_this_repos_backing_indices(self):
+        """Refreezing one repo must detach/delete only its own backing index,
+        never delete the shared data stream or another repo's thawed indices."""
+        mock_client = MagicMock()
+        # Two thawed backing indices in the SAME data stream from different
+        # repos, plus a live write index that is not a searchable snapshot.
+        mock_client.indices.get_settings.return_value = {
+            ".ds-df-test-000001": {
+                "settings": {"index": {"store": {
+                    "type": "snapshot",
+                    "snapshot": {"repository_name": "deepfreeze-000001"},
+                }}}
+            },
+            ".ds-df-test-000002": {
+                "settings": {"index": {"store": {
+                    "type": "snapshot",
+                    "snapshot": {"repository_name": "deepfreeze-000002"},
+                }}}
+            },
+            ".ds-df-test-000003": {
+                "settings": {"index": {"store": {"type": "fs"}}}
+            },
+        }
+        mock_client.indices.get_data_stream.return_value = {
+            "data_streams": [
+                {"name": "df-test", "indices": [
+                    {"index_name": ".ds-df-test-000001"},
+                    {"index_name": ".ds-df-test-000002"},
+                    {"index_name": ".ds-df-test-000003"},
+                ]}
+            ]
+        }
+        mock_client.indices.exists.return_value = True
+
+        repo = MagicMock()
+        repo.name = "deepfreeze-000001"
+
+        refreeze = Refreeze(client=mock_client, request_id="abc123", porcelain=True)
+        deleted = refreeze._delete_mounted_indices(repo)
+
+        # The whole data stream must NOT be deleted.
+        mock_client.indices.delete_data_stream.assert_not_called()
+        # Only repo A's backing index is detached from the data stream.
+        mock_client.indices.modify_data_stream.assert_called_once()
+        action = mock_client.indices.modify_data_stream.call_args.kwargs[
+            "body"
+        ]["actions"][0]["remove_backing_index"]
+        assert action == {
+            "data_stream": "df-test",
+            "index": ".ds-df-test-000001",
+        }
+        # Only repo A's index is deleted (not repo B's, not the write index).
+        deleted_indices = [
+            c.kwargs["index"] for c in mock_client.indices.delete.call_args_list
+        ]
+        assert deleted_indices == [".ds-df-test-000001"]
+        assert deleted == [".ds-df-test-000001"]
+
 
 class TestCleanupAction:
     """Tests for the Cleanup action class"""

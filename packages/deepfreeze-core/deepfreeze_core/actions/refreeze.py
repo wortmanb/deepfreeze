@@ -104,7 +104,10 @@ class Refreeze:
         Delete all searchable snapshot indices backed by this repository.
 
         Finds indices by checking store settings (reliable), then deletes them.
-        Data stream backing indices (.ds-*) are deleted via the data stream API.
+        A backing index that belongs to a data stream is first detached from
+        that stream (remove_backing_index) and then deleted, so refreezing one
+        repository never destroys backing indices belonging to other repos or
+        the data stream's live write index.
 
         :param repo: The repository to delete indices from
         :return: List of deleted index/data-stream names
@@ -135,30 +138,60 @@ class Refreeze:
                 len(ss_indices), repo.name, ss_indices,
             )
 
-            # Collect data streams that own any of these backing indices
-            ds_to_delete = set()
+            # Map each of THIS repo's backing indices to its owning data stream,
+            # and record each stream's write index (the newest backing index).
+            # We must NOT delete the whole data stream: it may also contain
+            # thawed backing indices from other repos/thaw requests, or the live
+            # write index. Instead we detach only this repo's indices and delete
+            # just those.
+            ss_set = set(ss_indices)
+            ds_for_index: dict[str, str] = {}
+            ds_write_index: dict[str, str] = {}
             try:
                 ds_response = self.client.indices.get_data_stream(name="*")
                 for ds in ds_response.get("data_streams", []):
                     ds_name = ds["name"]
-                    backing = {idx["index_name"] for idx in ds.get("indices", [])}
-                    if backing & set(ss_indices):
-                        ds_to_delete.add(ds_name)
+                    backing = [idx["index_name"] for idx in ds.get("indices", [])]
+                    for b in backing:
+                        if b in ss_set:
+                            ds_for_index[b] = ds_name
+                    # Data stream backing indices are listed oldest-first; the
+                    # last entry is the write index, which cannot be removed.
+                    if backing:
+                        ds_write_index[ds_name] = backing[-1]
             except Exception as e:
                 self.loggit.debug("Could not list data streams: %s", e)
 
-            # Delete data streams first (removes their backing indices)
-            for ds_name in ds_to_delete:
-                try:
-                    self.loggit.info("Deleting data stream %s", ds_name)
-                    self.client.indices.delete_data_stream(name=ds_name)
-                    deleted.append(f"data_stream:{ds_name}")
-                except Exception as e:
-                    self.loggit.warning("Failed to delete data stream %s: %s", ds_name, e)
-
-            # Delete any remaining non-data-stream indices
             for index_name in ss_indices:
                 try:
+                    ds_name = ds_for_index.get(index_name)
+                    if ds_name:
+                        if ds_write_index.get(ds_name) == index_name:
+                            # Never the case for a historical thawed snapshot,
+                            # but guard against destroying a live write index.
+                            self.loggit.warning(
+                                "Skipping %s: it is the write index of data "
+                                "stream %s", index_name, ds_name,
+                            )
+                            continue
+                        # Detach just this backing index so we can delete it
+                        # without touching the rest of the data stream.
+                        self.loggit.info(
+                            "Removing backing index %s from data stream %s",
+                            index_name, ds_name,
+                        )
+                        self.client.indices.modify_data_stream(
+                            body={
+                                "actions": [
+                                    {
+                                        "remove_backing_index": {
+                                            "data_stream": ds_name,
+                                            "index": index_name,
+                                        }
+                                    }
+                                ]
+                            }
+                        )
                     if self.client.indices.exists(index=index_name):
                         self.loggit.info("Deleting index %s", index_name)
                         self.client.indices.delete(index=index_name)
