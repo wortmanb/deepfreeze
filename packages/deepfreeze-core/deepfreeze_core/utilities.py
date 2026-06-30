@@ -1039,7 +1039,11 @@ def create_thawed_ilm_policy(client: Elasticsearch, repo_name: str) -> str:
             "phases": {
                 "delete": {
                     "min_age": "29d",
-                    "actions": {"delete": {"delete_searchable_snapshot": True}},
+                    # NEVER delete the underlying snapshot: snapshot deletion is
+                    # an operator action, never ILM-driven. This expires the
+                    # thawed *mount* after 29d while leaving the searchable
+                    # snapshot in object storage intact (re-thaw stays possible).
+                    "actions": {"delete": {"delete_searchable_snapshot": False}},
                 },
             }
         }

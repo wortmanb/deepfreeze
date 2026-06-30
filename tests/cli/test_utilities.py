@@ -550,6 +550,25 @@ class TestAllUtilityFunctionsAccessible:
         assert callable(find_and_mount_indices_in_date_range)
 
 
+class TestCreateThawedIlmPolicy:
+    """The thawed policy must never delete the underlying searchable snapshot."""
+
+    def test_thawed_policy_never_deletes_snapshot(self):
+        from deepfreeze_core.utilities import create_thawed_ilm_policy
+
+        client = MagicMock()
+        # Force the create path (policy does not already exist).
+        client.ilm.get_lifecycle.side_effect = Exception("not found")
+
+        name = create_thawed_ilm_policy(client, "deepfreeze-000010")
+
+        assert name == "deepfreeze-000010-thawed"
+        client.ilm.put_lifecycle.assert_called_once()
+        body = client.ilm.put_lifecycle.call_args.kwargs["body"]
+        delete_action = body["policy"]["phases"]["delete"]["actions"]["delete"]
+        assert delete_action["delete_searchable_snapshot"] is False
+
+
 class TestFindOrphanedFmCloneIndices:
     """Tests for find_orphaned_fm_clone_indices / delete_orphaned_fm_clone_indices."""
 
