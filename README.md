@@ -8,6 +8,11 @@ Deepfreeze enables you to archive Elasticsearch searchable snapshots to cloud ar
 
 See Elastic Search Labs blog post at https://www.elastic.co/search-labs/blog/s3-glacier-archiving-elasticsearch-deepfreeze
 
+> **Supported clusters:** deepfreeze works with **self-managed (on-prem)** and
+> **Elastic Cloud Hosted (ECH)** Elasticsearch clusters. It is **not supported on
+> Elasticsearch Serverless**, which does not expose the snapshot, repository, and
+> ILM APIs deepfreeze depends on.
+
 ## Packages
 
 | Package | Description |
@@ -74,7 +79,8 @@ Notes:
 
 - Python 3.10+ (Python 3.8+ for `--cli-only` installs)
 - Node.js 18+ and npm (not required for `--cli-only`)
-- A running Elasticsearch 8.x or 9.x cluster
+- A running Elasticsearch 8.x or 9.x cluster — **self-managed (on-prem)** or
+  **Elastic Cloud Hosted (ECH)**. Elasticsearch Serverless is **not supported**.
 - Cloud provider credentials (AWS, Azure, or GCP)
 
 > **Recommended:** Install into a Python virtual environment to avoid conflicts
