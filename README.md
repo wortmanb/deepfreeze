@@ -1,6 +1,6 @@
 # Deepfreeze
 
-[![Tests](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml/badge.svg)](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml)
+[![Tests](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/wortmanb/deepfreeze/actions/workflows/test.yml)
 
 Elasticsearch cloud storage archival and lifecycle management.
 
