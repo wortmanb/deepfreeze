@@ -196,7 +196,7 @@ def duration():
     """
     Number of days to keep objects restored from Glacier.
     """
-    return {Optional("duration", default=7): All(Coerce(int), Range(min=1, max=30))}
+    return {Optional("duration", default=30): All(Coerce(int), Range(min=1, max=30))}
 
 
 def retrieval_tier():

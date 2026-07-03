@@ -56,7 +56,7 @@ class Thaw:
     :param end_date: End of the date range to thaw (optional)
     :param request_id: ID of an existing thaw request to check/continue (optional)
     :param list_requests: If True, list all thaw requests
-    :param restore_days: Number of days to keep data restored (default: 7)
+    :param restore_days: Number of days to keep data restored (default: 30)
     :param retrieval_tier: Glacier retrieval tier (Standard, Bulk, Expedited)
     :param sync: If True, wait for restoration to complete
 
@@ -79,7 +79,7 @@ class Thaw:
         check_status: str = None,  # Alias for request_id (curator CLI uses this name)
         check_all: bool = False,  # Check all open requests (--check-status without argument)
         list_requests: bool = False,
-        restore_days: int = 7,
+        restore_days: int = 30,
         duration: int = None,  # Alias for restore_days (curator CLI uses this name)
         retrieval_tier: str = "Standard",
         sync: bool = False,
@@ -482,6 +482,10 @@ class Thaw:
                 )
             return request_id
 
+        # Calculate expiration time (created_at + restore_days) so it can be
+        # persisted on the thaw request and surfaced in the UI as a countdown.
+        expires_at = datetime.now(timezone.utc) + timedelta(days=self.restore_days)
+
         # Save thaw request
         save_thaw_request(
             self.client,
@@ -490,6 +494,8 @@ class Thaw:
             THAW_STATUS_IN_PROGRESS,
             start,
             end,
+            expires_at=expires_at,
+            restore_days=self.restore_days,
         )
 
         if tracker:
@@ -503,9 +509,6 @@ class Thaw:
                     "end_date": end.isoformat(),
                 }
             )
-
-        # Calculate expiration time
-        expires_at = datetime.now(timezone.utc) + timedelta(days=self.restore_days)
 
         # Initiate S3 restore for each repository
         if not self.porcelain:

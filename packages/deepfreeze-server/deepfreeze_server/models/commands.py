@@ -34,7 +34,7 @@ class RotateRequest(BaseModel):
 class ThawCreateRequest(BaseModel):
     start_date: str  # ISO 8601
     end_date: str  # ISO 8601
-    duration: int = 7
+    duration: int = 30
     tier: str = "Standard"
     sync: bool = False
     dry_run: bool = False

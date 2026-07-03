@@ -101,7 +101,7 @@ class DeepfreezeClient:
         self,
         start_date: str,
         end_date: str,
-        duration: int = 7,
+        duration: int = 30,
         tier: str = "Standard",
         sync: bool = True,
         dry_run: bool = False,

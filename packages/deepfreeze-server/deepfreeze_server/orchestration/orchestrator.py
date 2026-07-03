@@ -125,7 +125,7 @@ class DeepfreezeOrchestrator:
         start_date: datetime,
         end_date: datetime,
         sync: bool = False,
-        duration: int = 7,
+        duration: int = 30,
         tier: str = "Standard",
         dry_run: bool = False,
     ) -> JobSubmission:

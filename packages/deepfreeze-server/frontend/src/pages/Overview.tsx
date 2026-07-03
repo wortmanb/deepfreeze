@@ -151,9 +151,32 @@ function formatElapsed(createdAt: string): string {
   }
 }
 
+function formatCountdown(expiresAt: string): { text: string; expired: boolean } {
+  try {
+    const expires = new Date(expiresAt);
+    const now = new Date();
+    const remainingSec = Math.floor((expires.getTime() - now.getTime()) / 1000);
+    if (remainingSec <= 0) return { text: 'expired', expired: true };
+    const days = Math.floor(remainingSec / 86400);
+    const hours = Math.floor((remainingSec % 86400) / 3600);
+    const minutes = Math.floor((remainingSec % 3600) / 60);
+    const seconds = remainingSec % 60;
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (days > 0 || hours > 0) parts.push(`${hours}h`);
+    parts.push(`${minutes}m`);
+    if (days === 0) parts.push(`${seconds}s`);
+    return { text: parts.join(' '), expired: false };
+  } catch {
+    return { text: '', expired: false };
+  }
+}
+
 function ThawDetailContent({ item }: { item: ThawReq }) {
   const [elapsed, setElapsed] = useState('');
+  const [countdown, setCountdown] = useState<{ text: string; expired: boolean }>({ text: '', expired: false });
   const createdAt = String(item.created_at || '');
+  const expiresAt = String(item.expires_at || '');
 
   useEffect(() => {
     if (!createdAt) return;
@@ -161,6 +184,13 @@ function ThawDetailContent({ item }: { item: ThawReq }) {
     const timer = setInterval(() => setElapsed(formatElapsed(createdAt)), 1000);
     return () => clearInterval(timer);
   }, [createdAt]);
+
+  useEffect(() => {
+    if (!expiresAt) return;
+    setCountdown(formatCountdown(expiresAt));
+    const timer = setInterval(() => setCountdown(formatCountdown(expiresAt)), 1000);
+    return () => clearInterval(timer);
+  }, [expiresAt]);
 
   const statusStr = String(item.status || 'unknown');
   const listItems = [
@@ -172,6 +202,20 @@ function ThawDetailContent({ item }: { item: ThawReq }) {
     { title: 'Created At', description: createdAt ? `${trimDate(createdAt)}  (${elapsed} ago)` : '--' },
     { title: 'Date Range', description: `${trimDate(item.start_date) || '?'} \u2192 ${trimDate(item.end_date) || '?'}` },
   ];
+
+  if (expiresAt) {
+    listItems.push({
+      title: 'Expires At',
+      description: (
+        <span>
+          {trimDate(expiresAt)}{'  '}
+          <EuiBadge color={countdown.expired ? 'danger' : 'warning'}>
+            {countdown.expired ? 'expired' : `${countdown.text} left`}
+          </EuiBadge>
+        </span>
+      ),
+    });
+  }
 
   return <EuiDescriptionList type="column" compressed listItems={listItems} />;
 }

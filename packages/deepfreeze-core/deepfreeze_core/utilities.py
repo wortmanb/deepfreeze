@@ -1480,6 +1480,8 @@ def save_thaw_request(
     status: str,
     start_date: datetime = None,
     end_date: datetime = None,
+    expires_at: datetime = None,
+    restore_days: int = None,
 ) -> None:
     """
     Save a thaw request to the status index for later querying.
@@ -1496,6 +1498,10 @@ def save_thaw_request(
     :type start_date: datetime
     :param end_date: End of the date range for this thaw request
     :type end_date: datetime
+    :param expires_at: When the restored data expires (created_at + restore_days)
+    :type expires_at: datetime
+    :param restore_days: Number of days the data is kept restored
+    :type restore_days: int
 
     :return: None
     :rtype: None
@@ -1517,6 +1523,10 @@ def save_thaw_request(
         request_doc["start_date"] = start_date.isoformat()
     if end_date:
         request_doc["end_date"] = end_date.isoformat()
+    if expires_at:
+        request_doc["expires_at"] = expires_at.isoformat()
+    if restore_days is not None:
+        request_doc["restore_days"] = restore_days
 
     try:
         client.index(index=STATUS_INDEX, id=request_id, body=request_doc)
